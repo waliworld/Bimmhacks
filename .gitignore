@@ -9,6 +9,8 @@ id_rsa
 id_rsa.*
 *.ppk
 .bimmhacks-installer.json
+# coding snapshots contain a car's VIN: keep them local
+coding-backups/
 __pycache__/
 *.pyc
 .DS_Store

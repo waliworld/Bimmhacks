@@ -5,7 +5,10 @@ eDrive, Live Data, G-Force, Warm-Up, Virtual Dyno, Brake Test, Drag Timer, Fault
 and more — and sets up an **on-car App Store** so you can add and update apps from the car screen
 later. Everything the installer changes is backed up first, and one button puts the car back to stock.
 
-The installer window has three tabs: **1. Root access → 2. Apps → 3. App Store.**
+The installer window has tabs: **Root access → Apps → App Store → idrive-apps → Bimmhacks Apps → Credits.**
+
+> Flashing app and installer developed by **Mr. Wali**. Apps, root tool and Store are open source —
+> see the **Credits** tab.
 
 ## Before you start
 
@@ -26,22 +29,37 @@ The installer window has three tabs: **1. Root access → 2. Apps → 3. App Sto
    - It offers to relaunch as Administrator — say **Y** for the root-access step.
    - If Windows SmartScreen warns, click *More info* → *Run anyway*.
 
-### Tab 1 — Root access (once per car)
+### Tab — Root access (once per car)
 
 Only needed if the car is **not already rooted**. Already have root SSH and the `id_rsa` key? Skip
-to Tab 2 and pick the key with *Browse*.
+to the **Apps** tab and pick the key with *Browse*.
 
 > ⚠️ **Flashing reprograms the head unit and wipes its coding and BMW Digital Key pairings.**
-> Back up the coding first with BimmerCode or E-Sys, and plan to re-pair digital keys. This is a
-> one-time step; do not repeat it.
+> Back up the coding first, and plan to re-pair digital keys. This is a one-time step; do not repeat it.
+
+**Backing up the coding — two things, both needed:**
+
+1. **Coding snapshot (this installer).** Click **Back up coding (snapshot)**. It reads the car over
+   ENET and saves, under `coding-backups/`, exactly which **CAFD coding versions**, VIN, IP and
+   faults are on the car. This records *what to restore* — it is **not** a restorable backup by
+   itself.
+2. **Restorable backup (BimmerCode or E-Sys).** Also save the coding with BimmerCode or E-Sys —
+   this is the only thing that can actually re-code the car. Then tick **"I have saved a restorable
+   coding backup"**. The **Flash** button stays locked until you do.
+
+Then:
 
 1. Connect the ENET cable, wake the car.
 2. Click **Detect VIN** (or type the 17-char VIN). Pick the head-unit variant (id7 for iDrive 7).
-3. Click **Flash + Enable SSH (once)** and confirm. The unit reboots; this takes a few minutes.
-4. When it finishes, the car's SSH key is filled into the connection fields automatically.
+3. Take both backups above and tick the confirmation box.
+4. Click **Flash + Enable SSH (once)** and confirm. The unit reboots; this takes a few minutes.
+5. When it finishes, the car's SSH key is filled into the connection fields automatically.
    - **Enable (repair)**: re-opens SSH on an already-flashed car whose SSH stopped — no flashing.
-   - **Fix refusing key**: only if SSH opens but login is refused.
+   - **Fix refusing key**: only if SSH opens but login is refused (also needs the backup confirmation).
    - **Check state**: read-only; changes nothing.
+
+If coding is wiped, use the snapshot in `coding-backups/` to see which CAFD versions to restore,
+then restore them with BimmerCode or E-Sys.
 
 ### Tab 2 — Apps
 
@@ -51,13 +69,30 @@ to Tab 2 and pick the key with *Browse*.
 4. On the iDrive: **Apps** → the new tiles (after 1-2 minutes, or after the reboot).
    - **Status** shows what is installed; **Restore to stock** removes everything.
 
-### Tab 3 — App Store
+### Tab — App Store
 
 Installs the on-car **MGU App Store**, so you browse, install and update apps from the car screen
 afterwards (**Apps → Store**). The car needs internet for this (see above).
 
 1. Make sure the car has internet, then click **Install the App Store**.
 2. When it finishes, restart the head unit (car **Settings**, or power-cycle) to see the Store tile.
+
+### Tab — idrive-apps
+
+Robert Nisipeanu's **cluster & HUD maps** (Waze / CarPlay map on the instrument cluster and HUD).
+These install through the on-car Store — install the **App Store** first; idrive-apps is a built-in
+Store source, so it appears there automatically.
+
+- Online car: click **Make idrive-apps available**, then on the car open **Apps → Store** and
+  install *Waze on cluster*.
+- Offline car: set a **Stage to** folder (a USB stick), click the button to download the apps onto
+  it, then on the car use **Apps → Store → USB**.
+
+### Tab — Bimmhacks Apps
+
+Apps developed in-house (Mr. Wali). Enter your own GitHub **owner/repo** of packaged apps; it
+installs through the Store the same way. Leave it blank until the repository is published. Offline
+cars can be served from a staged USB folder, same as above.
 
 ## macOS / Linux
 
@@ -70,6 +105,7 @@ Without a window (any OS):
 ```sh
 # root access (ENET cable; once per car)
 python3 installer/bimmhacks_installer.py root-status                 # read-only check
+python3 installer/bimmhacks_installer.py backup-coding --out coding-backups   # coding snapshot
 python3 installer/bimmhacks_installer.py root-flash --vin <17-CHAR-VIN>   # flash + enable SSH
 python3 installer/bimmhacks_installer.py root-enable                 # repair, no flashing
 
@@ -79,8 +115,11 @@ python3 installer/bimmhacks_installer.py install --key <id_rsa> --language ko re
 python3 installer/bimmhacks_installer.py status  --key <id_rsa>
 python3 installer/bimmhacks_installer.py restore --key <id_rsa>
 
-# app store
+# app store + more sources
 python3 installer/bimmhacks_installer.py store-install --key <id_rsa>
+python3 installer/bimmhacks_installer.py install-idrive-apps --key <id_rsa>
+python3 installer/bimmhacks_installer.py install-our-apps --key <id_rsa> --repo owner/repo
+python3 installer/bimmhacks_installer.py usb-repo --stage /path/to/usb --repo robertnisipeanu/idrive-apps
 ```
 
 The root key is written to `tools/idrive7-8-ssh-root/data/enrollments/<VIN>/id_rsa`.

@@ -31,7 +31,7 @@ it. Stage C (App Store) needs internet at the car (or a prepared USB stick).
 """
 import argparse, io, json, os, queue, re, shutil, stat, subprocess, sys, tarfile, tempfile, threading
 
-VERSION = '1.1.0'
+VERSION = '1.2.0'
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 ROOT = os.environ.get('BIMMHACKS_APPS_ROOT') or os.path.join(REPO, 'idrive7-apps')
@@ -453,7 +453,7 @@ def do_root(action, log, vin=None, ip=None, gateway='auto', arch='id7'):
              'disable': 'Reverting persistence and stopping debug/SSH ...'}
     log(names.get(action, 'Running root-access action: %s' % action))
     code = run_ssh_root(action, log, vin=vin, ip=ip, gateway=gateway, arch=arch,
-                        persist=(action in ('flash', 'enable')))
+                        persist=(action in ('flash', 'enable', 'fix-key')))
     if code:
         raise InstallerError('The root-access step reported a problem (exit %d; see the log above).' % code)
     if action in ('flash', 'enable', 'fix-key'):
@@ -478,6 +478,51 @@ def detect_vin(log, ip=None, gateway='auto', arch='id7'):
         if v:
             return v.group(1)
     return None
+
+
+# ------------------------------------------------------- coding snapshot (before flashing)
+
+CODING_BACKUP_DIR = os.path.join(REPO, 'coding-backups')
+
+
+def do_backup_coding(log, vin=None, ip=None, gateway='auto', arch='id7', out_dir=None):
+    """Save a diagnostic snapshot of the car's CAFD versions, VIN, IP and faults. -> file path.
+
+    NOT a restorable coding backup (that needs BimmerCode / E-Sys); it records exactly what is on
+    the car so a restore is reliable. Run it before any flash."""
+    ensure_cryptography(log)
+    out_dir = out_dir or CODING_BACKUP_DIR
+    backup = os.path.join(HERE, 'coding_backup.py')
+    if not os.path.isfile(backup):
+        raise InstallerError('coding_backup.py is missing next to the installer.')
+    log('Reading the head unit over ENET for a coding snapshot (read-only) ...')
+    argv = [sys.executable, backup, '--out', out_dir]
+    if gateway and gateway != 'auto':
+        argv += ['--gateway', gateway]
+    if ip:
+        argv += ['--mgu-ip', ip]
+    if arch and arch != 'id7':
+        argv += ['--arch', arch]
+    if vin:
+        argv += ['--vin', vin]
+    env = dict(os.environ)
+    env['PYTHONIOENCODING'] = 'utf-8'
+    env['PYTHONUNBUFFERED'] = '1'
+    p = subprocess.Popen(argv, cwd=SSHROOT_DIR, env=env, stdin=subprocess.DEVNULL,
+                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    saved = None
+    for raw in iter(p.stdout.readline, b''):
+        line = raw.decode('utf-8', 'replace').rstrip('\r\n')
+        if 'DeprecationWarning' in line or 'utcnow()' in line:
+            continue
+        log('  coding> ' + line)
+        if line.strip().endswith('.txt'):
+            saved = line.strip()
+    if p.wait():
+        raise InstallerError('The coding snapshot could not be read. Is the ENET cable in and the car awake?')
+    log('Coding snapshot saved in: ' + out_dir)
+    log('REMINDER: a snapshot is not a restore. Also back up the coding with BimmerCode or E-Sys.')
+    return saved or out_dir
 
 
 # -------------------------------------------------------------- stage C: the App Store (mgu-store)
@@ -508,6 +553,68 @@ def do_store_install(node, ip, key, no_renderer=False, no_uplink=False, log=prin
         raise InstallerError('The App Store install failed (exit %d; see above).' % code)
     log('App Store installed. Restart the head unit (Settings on the car, or power-cycle) to see its tile.')
     log('Afterwards the client installs and updates apps from the car screen - Apps > Store.')
+
+
+# ---- extra app sources installed through the Store (idrive-apps, and our own apps) --------------
+
+# the Store's built-in sources ship with first-install; these two tabs are about these repos
+IDRIVE_APPS_REPO = 'robertnisipeanu/idrive-apps'
+# our own apps: override with BIMMHACKS_APPS_REPO=owner/repo once the repo exists
+BIMMHACKS_APPS_REPO = os.environ.get('BIMMHACKS_APPS_REPO', '')
+
+
+def do_usb_repo(node, dest, inputs, log=print):
+    """Stage a repository (apps) onto a folder / USB stick with the Store's mgu-install.js usb-repo,
+    so a car installs it from the USB page without the car needing internet. -> the mgu-repo folder."""
+    if not os.path.isfile(STORE_JS):
+        raise InstallerError('The App Store installer is missing (expected it in %s).' % STORE_DIR)
+    if not dest:
+        raise InstallerError('Pick a folder or USB stick to stage onto.')
+    os.makedirs(dest, exist_ok=True)
+    log('Staging %s onto %s (downloads the apps once; needs internet on this PC) ...'
+        % (', '.join(inputs) if inputs else 'the default repository', dest))
+    argv = [node, STORE_JS, 'usb-repo', dest] + list(inputs)
+    p = subprocess.Popen(argv, cwd=STORE_DIR, stdin=subprocess.DEVNULL,
+                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    for raw in iter(p.stdout.readline, b''):
+        log('  store> ' + raw.decode('utf-8', 'replace').rstrip('\r\n'))
+    code = p.wait()
+    if code == 2:
+        raise InstallerError('Staging was refused or the usage was wrong (see above).')
+    if code:
+        raise InstallerError('Staging the apps failed (exit %d; see above).' % code)
+    repo = os.path.join(dest, 'mgu-repo')
+    log('Staged. Put this stick in the car and open Apps > Store > USB to install.')
+    return repo
+
+
+def do_install_apps_source(node, ip, key, repo, label, stage_dir=None, log=print):
+    """Make an extra app source available on the car. These apps are designed to be installed
+    through the on-car Store, so there are two honest paths:
+
+      - stage_dir given  -> write the repo to a USB folder (works offline); the car installs it
+                            from Apps > Store > USB. No car internet needed.
+      - no stage_dir     -> ensure the Store is installed so the source is available on the car
+                            (needs car internet). idrive-apps is a built-in source; a custom repo
+                            must be added once on the car (Settings > Add source) or staged to USB.
+    """
+    if not re.match(r'^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$', repo or ''):
+        raise InstallerError('The source must be a GitHub owner/repo, e.g. robertnisipeanu/idrive-apps.')
+    if stage_dir:
+        log('Staging %s to %s for offline install on the car ...' % (label, stage_dir))
+        do_usb_repo(node, stage_dir, ['github:' + repo], log=log)
+        log('%s staged. Put the stick in the car and open Apps > Store > USB to install.' % label)
+        return
+    if not key or not os.path.isfile(key):
+        raise InstallerError('The car SSH key is needed (or stage to a USB folder instead).')
+    log('Ensuring the on-car Store is present so %s is available ...' % label)
+    do_store_install(node, ip, key, log=log)
+    if repo == IDRIVE_APPS_REPO:
+        log('%s is a built-in Store source: on the car open Apps > Store, find the apps and Install.' % label)
+    else:
+        log('%s: add the source on the car once (Settings > Add source > %s), then install it there,'
+            % (label, repo))
+        log('or re-run this with a USB stage folder to deliver it without on-car typing.')
 
 
 def do_install(ssh, node, ip, key, apps, language, reboot=True, controller_gate=True, keep_build=False, log=print):
@@ -571,6 +678,27 @@ def do_simple(ssh, ip, key, what, log=print):
 
 # ----------------------------------------------------------------------------- window
 
+# Visual identity (kept deliberately restrained: one ink, one accent, one surface).
+INK = '#12151c'       # near-black header / console
+SURFACE = '#f4f5f7'   # window body
+PANEL = '#ffffff'     # cards
+LINE = '#d9dce2'      # hairlines
+ACCENT = '#0b63d6'    # single BMW-ish blue accent
+ACCENT_DK = '#0a2a6b'
+MUTED = '#6b7280'
+GOOD = '#1f9d55'
+WARN = '#b42318'
+
+CREDITS = [
+    ('Flashing app & Bimmhacks installer', 'Developed by Mr. Wali'),
+    ('MGU custom apps (idrive7-apps)', 'cauliflowermossgrape - MIT'),
+    ('Root over ENET (idrive7-8-ssh-root)', 'cauliflowermossgrape - public domain'),
+    ('MGU App Store (mgu-store)', 'Robert Nisipeanu & IterioDev - GPL-3.0'),
+    ('idrive-apps (cluster / HUD maps)', 'Robert Nisipeanu & contributors - GPL-3.0'),
+    ('Doom engine (doomgeneric) + Freedoom', 'id Software lineage / Freedoom - GPL-2.0'),
+]
+
+
 def run_gui():
     import tkinter as tk
     from tkinter import ttk, filedialog, messagebox, scrolledtext
@@ -583,70 +711,150 @@ def run_gui():
     buttons = []
 
     root = tk.Tk()
-    root.title('Bimmhacks iDrive 7 App Installer  v' + VERSION)
-    root.minsize(820, 720)
+    root.title('Bimmhacks  -  iDrive 7 Flash & App Studio')
+    root.minsize(900, 760)
+    root.configure(bg=SURFACE)
+
+    st = ttk.Style()
     try:
-        ttk.Style().theme_use('vista' if IS_WIN else 'clam')
+        st.theme_use('clam')
     except tk.TclError:
         pass
-    pad = {'padx': 8, 'pady': 4}
+    base_font = ('Segoe UI', 10) if IS_WIN else ('DejaVu Sans', 10)
+    st.configure('.', background=SURFACE, foreground=INK, font=base_font)
+    st.configure('TFrame', background=SURFACE)
+    st.configure('Card.TFrame', background=PANEL, relief='flat')
+    st.configure('TLabel', background=SURFACE, foreground=INK)
+    st.configure('Card.TLabel', background=PANEL, foreground=INK)
+    st.configure('Muted.TLabel', background=SURFACE, foreground=MUTED)
+    st.configure('CardMuted.TLabel', background=PANEL, foreground=MUTED)
+    st.configure('Warn.TLabel', background=PANEL, foreground=WARN)
+    st.configure('Eyebrow.TLabel', background=PANEL, foreground=ACCENT, font=(base_font[0], 8, 'bold'))
+    st.configure('H.TLabel', background=PANEL, foreground=INK, font=(base_font[0], 13, 'bold'))
+    st.configure('TCheckbutton', background=PANEL, foreground=INK)
+    st.map('TCheckbutton', background=[('active', PANEL)])
+    st.configure('TEntry', fieldbackground='#ffffff', bordercolor=LINE)
+    st.configure('TCombobox', fieldbackground='#ffffff')
+    # buttons
+    st.configure('TButton', background='#e8eaee', foreground=INK, borderwidth=0, focusthickness=0,
+                 padding=(12, 7), font=(base_font[0], 10))
+    st.map('TButton', background=[('active', '#dcdfe5'), ('disabled', '#eef0f3')],
+           foreground=[('disabled', '#aab0ba')])
+    st.configure('Accent.TButton', background=ACCENT, foreground='#ffffff', padding=(16, 9),
+                 font=(base_font[0], 10, 'bold'))
+    st.map('Accent.TButton', background=[('active', ACCENT_DK), ('disabled', '#9bb6e4')])
+    st.configure('Danger.TButton', background='#fbeceb', foreground=WARN, padding=(14, 8),
+                 font=(base_font[0], 10, 'bold'))
+    st.map('Danger.TButton', background=[('active', '#f6d9d6'), ('disabled', '#f3eceb')])
+    # notebook as a quiet left-to-right rail
+    st.configure('TNotebook', background=SURFACE, borderwidth=0, tabmargins=(0, 6, 0, 0))
+    st.configure('TNotebook.Tab', background=SURFACE, foreground=MUTED, padding=(16, 9),
+                 borderwidth=0, font=(base_font[0], 10, 'bold'))
+    st.map('TNotebook.Tab', background=[('selected', PANEL)], foreground=[('selected', ACCENT)],
+           expand=[('selected', (0, 0, 0, 0))])
 
-    head = ttk.Frame(root)
-    head.pack(fill='x', **pad)
-    ttk.Label(head, text='Bimmhacks iDrive 7 Apps', font=('Segoe UI', 16, 'bold')).pack(anchor='w')
-    ttk.Label(head, text='Car parked, ignition on, charger connected, PC connected to the car. '
-                         'Work through the tabs left to right.').pack(anchor='w')
+    # ---- header ---------------------------------------------------------------------------------
+    header = tk.Frame(root, bg=INK)
+    header.pack(fill='x')
+    inner = tk.Frame(header, bg=INK)
+    inner.pack(fill='x', padx=20, pady=14)
+    tk.Label(inner, text='BIMMHACKS', bg=INK, fg='#ffffff',
+             font=(base_font[0], 19, 'bold')).pack(side='left')
+    tk.Label(inner, text='iDrive 7 / MGU  -  flash, root & app studio', bg=INK, fg='#aeb6c2',
+             font=(base_font[0], 10)).pack(side='left', padx=(12, 0), pady=(7, 0))
+    tk.Label(inner, text='by Mr. Wali', bg=INK, fg=ACCENT,
+             font=(base_font[0], 10, 'bold')).pack(side='right', pady=(6, 0))
+    tk.Frame(root, bg=ACCENT, height=3).pack(fill='x')
 
-    # ---- shared connection fields --------------------------------------------------------------
-    conn = ttk.LabelFrame(root, text='Car connection (shared by every tab)')
-    conn.pack(fill='x', **pad)
+    body = tk.Frame(root, bg=SURFACE)
+    body.pack(fill='both', expand=True)
+    pad = {'padx': 8, 'pady': 5}
+
+    # ---- shared connection card -----------------------------------------------------------------
+    conn = tk.Frame(body, bg=PANEL, highlightbackground=LINE, highlightthickness=1)
+    conn.pack(fill='x', padx=16, pady=(14, 8))
+    ttk.Label(conn, text='CAR CONNECTION', style='Eyebrow.TLabel').grid(row=0, column=0, columnspan=4,
+              sticky='w', padx=12, pady=(10, 2))
     vin_var = tk.StringVar(value=cfg.get('vin', ''))
     key_var = tk.StringVar(value=cfg.get('key', ''))
     ip_var = tk.StringVar(value=cfg.get('ip', DEFAULT_IP))
     arch_var = tk.StringVar(value=cfg.get('arch', 'id7'))
 
-    ttk.Label(conn, text='VIN (17 chars):').grid(row=0, column=0, sticky='w', **pad)
-    ttk.Entry(conn, textvariable=vin_var, width=22).grid(row=0, column=1, sticky='w', **pad)
-    ttk.Label(conn, text='Head unit variant:').grid(row=0, column=2, sticky='e', **pad)
+    def cl(txt, r, c):
+        ttk.Label(conn, text=txt, style='CardMuted.TLabel').grid(row=r, column=c, sticky='w', padx=12, pady=3)
+    cl('VIN', 1, 0)
+    ttk.Entry(conn, textvariable=vin_var, width=22).grid(row=1, column=1, sticky='w', padx=4, pady=3)
+    cl('Variant', 1, 2)
     arch_box = ttk.Combobox(conn, state='readonly', width=10, values=list(ARCHES))
     arch_box.current(ARCHES.index(arch_var.get()) if arch_var.get() in ARCHES else 0)
-    arch_box.grid(row=0, column=3, sticky='w', **pad)
-
-    ttk.Label(conn, text='Root SSH key (id_rsa):').grid(row=1, column=0, sticky='w', **pad)
-    ttk.Entry(conn, textvariable=key_var, width=48).grid(row=1, column=1, columnspan=2, sticky='we', **pad)
+    arch_box.grid(row=1, column=3, sticky='w', padx=4, pady=3)
+    cl('Root SSH key', 2, 0)
+    ttk.Entry(conn, textvariable=key_var).grid(row=2, column=1, columnspan=2, sticky='we', padx=4, pady=3)
 
     def browse():
         start_dir = SSHROOT_ENROLL if os.path.isdir(SSHROOT_ENROLL) else REPO
         p = filedialog.askopenfilename(title='The car SSH key (id_rsa)', initialdir=start_dir)
         if p:
             key_var.set(p)
-            ip = ip_from_key(p)
-            if ip:
-                ip_var.set(ip)
-    ttk.Button(conn, text='Browse...', command=browse).grid(row=1, column=3, **pad)
-    ttk.Label(conn, text='Head unit IP address:').grid(row=2, column=0, sticky='w', **pad)
-    ttk.Entry(conn, textvariable=ip_var, width=20).grid(row=2, column=1, sticky='w', **pad)
-    ttk.Label(conn, text='(ENET: 169.254.36.47)', foreground='#777').grid(row=2, column=2, sticky='w', **pad)
+            got = ip_from_key(p)
+            if got:
+                ip_var.set(got)
+    ttk.Button(conn, text='Browse', command=browse).grid(row=2, column=3, sticky='we', padx=(4, 12), pady=3)
+    cl('Head unit IP', 3, 0)
+    ttk.Entry(conn, textvariable=ip_var, width=22).grid(row=3, column=1, sticky='w', padx=4, pady=(3, 10))
+    ttk.Label(conn, text='ENET link-local default 169.254.36.47', style='CardMuted.TLabel').grid(
+        row=3, column=2, columnspan=2, sticky='w', padx=4, pady=(3, 10))
     conn.columnconfigure(1, weight=1)
 
-    nb = ttk.Notebook(root)
-    nb.pack(fill='x', **pad)
+    nb = ttk.Notebook(body)
+    nb.pack(fill='both', expand=True, padx=16, pady=(0, 6))
 
-    # ---- helpers -------------------------------------------------------------------------------
+    def card(parent):
+        c = tk.Frame(parent, bg=PANEL, highlightbackground=LINE, highlightthickness=1)
+        c.pack(fill='both', expand=True, padx=2, pady=2)
+        return c
+
+    def eyebrow(parent, text):
+        ttk.Label(parent, text=text, style='Eyebrow.TLabel').pack(anchor='w', padx=16, pady=(14, 0))
+
+    def title(parent, text):
+        ttk.Label(parent, text=text, style='H.TLabel').pack(anchor='w', padx=16, pady=(1, 4))
+
+    def para(parent, text):
+        ttk.Label(parent, text=text, style='Card.TLabel', justify='left', wraplength=800).pack(
+            anchor='w', padx=16, pady=2)
+
+    # ---- helpers --------------------------------------------------------------------------------
     def log(msg):
         q.put(('log', msg))
 
     def save():
         picked = [a for a, v in app_vars.items() if v.get()]
-        save_config({'vin': vin_var.get().strip().upper(), 'key': key_var.get().strip().strip('"'),
-                     'ip': ip_var.get().strip(), 'arch': ARCHES[arch_box.current()] if arch_box.current() >= 0 else 'id7',
-                     'apps': picked, 'language': langs[lang_box.current()] if lang_box.current() >= 0 else 'en',
-                     'reboot': reboot_var.get()})
+        save_config(dict(load_config(),
+                         vin=vin_var.get().strip().upper(), key=key_var.get().strip().strip('"'),
+                         ip=ip_var.get().strip(),
+                         arch=ARCHES[arch_box.current()] if arch_box.current() >= 0 else 'id7',
+                         apps=picked,
+                         language=langs[lang_box.current()] if lang_box.current() >= 0 else 'en',
+                         reboot=reboot_var.get()))
 
     def conn_values():
         save()
         return (vin_var.get().strip().upper(), key_var.get().strip().strip('"'),
                 ip_var.get().strip(), ARCHES[arch_box.current()] if arch_box.current() >= 0 else 'id7')
+
+    def need_ssh():
+        s = find_ssh()
+        if not s:
+            raise InstallerError('The OpenSSH client is missing. Windows: Settings > Apps > Optional '
+                                 'features > add "OpenSSH Client".')
+        return s
+
+    def need_node():
+        n = find_node()
+        if not n:
+            raise InstallerError('Node.js is not installed: get the LTS version from https://nodejs.org/')
+        return n
 
     def start(work_fn, done_msg):
         if busy['on']:
@@ -663,23 +871,36 @@ def run_gui():
             except InstallerError as e:
                 log('ERROR: ' + str(e))
                 q.put(('done', (False, str(e))))
-            except Exception as e:  # keep the window alive, show what happened
+            except Exception as e:
                 log('ERROR: %s: %s' % (type(e).__name__, e))
                 q.put(('done', (False, 'Unexpected error: %s' % e)))
         threading.Thread(target=work, daemon=True).start()
 
-    # ============================ Tab 1: Root access ============================================
+    # ========================= Tab 1: Root access ===============================================
     t_root = ttk.Frame(nb)
-    nb.add(t_root, text='  1. Root access  ')
-    ttk.Label(t_root, text='Enable root SSH on a stock car over an ENET cable. Do this ONCE per head unit; '
-              'it writes the car SSH key the other tabs use.\nAlready rooted and have the key? Skip to tab 2 '
-              'and pick it with Browse.', justify='left').pack(anchor='w', **pad)
-    warn = ttk.Label(t_root, foreground='#a00', justify='left',
-                     text='Flashing wipes the head unit coding and BMW Digital Key pairings. Back up the coding '
-                          '(BimmerCode / E-Sys) first. Windows: run this installer as Administrator.')
-    warn.pack(anchor='w', **pad)
-    rb = ttk.Frame(t_root)
-    rb.pack(anchor='w', **pad)
+    nb.add(t_root, text='Root access')
+    c1 = card(t_root)
+    eyebrow(c1, 'STEP 1  -  ONCE PER CAR')
+    title(c1, 'Back up, then enable root over ENET')
+    para(c1, 'Connect a wired ENET cable, ignition on. Back up the coding first, then flash. Already '
+             'rooted and have the key? Skip to the app tabs and pick the key with Browse.')
+    ttk.Label(c1, text='Flashing reprograms the head unit and wipes its coding and BMW Digital Key '
+              'pairings. Back up first; re-pair keys after. Windows: run as Administrator.',
+              style='Warn.TLabel', justify='left', wraplength=800).pack(anchor='w', padx=16, pady=(4, 2))
+
+    backup_done = tk.BooleanVar(value=False)
+    gate_row = tk.Frame(c1, bg=PANEL)
+    gate_row.pack(fill='x', padx=16, pady=(8, 2))
+    ttk.Checkbutton(gate_row, variable=backup_done,
+                    text='I have saved a restorable coding backup (BimmerCode / E-Sys)').pack(side='left')
+
+    def on_backup():
+        vin, _, ip, arch = conn_values()
+        def w():
+            path = do_backup_coding(log, vin=vin or None, ip=ip or None, arch=arch)
+            backup_done.set(True)
+            log('Snapshot captured. Keep it with your BimmerCode/E-Sys backup: ' + str(path))
+        start(w, 'Coding snapshot saved - see the log. Also keep a BimmerCode/E-Sys backup.')
 
     def on_detect_vin():
         _, _, ip, arch = conn_values()
@@ -692,76 +913,79 @@ def run_gui():
                 log('VIN not detected. Is the ENET cable in and the car awake?')
         start(w, 'VIN read - see the log.')
 
-    def on_root(action, confirm=None):
+    def on_root(action, confirm=None, need_backup=False):
         vin, _, ip, arch = conn_values()
+        if need_backup and not backup_done.get():
+            messagebox.showwarning('Back up first', 'Save a coding backup before flashing.\n\nClick '
+                                   '"Back up coding (snapshot)" and take a BimmerCode / E-Sys backup, '
+                                   'then tick the confirmation box.')
+            return
         if confirm and not messagebox.askyesno('Root access', confirm):
             return
         def w():
             key = do_root(action, log, vin=vin or None, ip=ip or None, arch=arch)
             if key:
                 key_var.set(key)
-                ipp = ip_from_key(key)
-                if ipp:
-                    ip_var.set(ipp)
+                got = ip_from_key(key)
+                if got:
+                    ip_var.set(got)
         start(w, 'Root-access step finished - see the log.')
 
-    for text, action, confirm in (
-            ('Detect VIN', 'detect-vin', None),
-            ('Check state', 'status', None),
-            ('Flash + Enable SSH (once)', 'flash',
-             'Flash the debug image and enable root SSH?\n\nThis REPROGRAMS the head unit and WIPES its coding '
-             'and Digital Key pairings. Back up the coding first. Do this only once per car.'),
-            ('Enable (repair)', 'enable', None),
-            ('Fix refusing key', 'fix-key',
-             'Re-flash to install our root key? Use this only if SSH opens but login is refused. It re-flashes '
-             '(wipes coding again).'),
-            ('Disable', 'disable', 'Revert persistence and stop debug/SSH on this car?')):
-        if action == 'detect-vin':
-            b = ttk.Button(rb, text=text, command=on_detect_vin)
-        else:
-            b = ttk.Button(rb, text=text, command=lambda a=action, c=confirm: on_root(a, c))
-        b.pack(side='left', padx=4, pady=6)
-        buttons.append(b)
+    rb = tk.Frame(c1, bg=PANEL)
+    rb.pack(fill='x', padx=14, pady=(8, 6))
+    ttk.Button(rb, text='Detect VIN', command=on_detect_vin).pack(side='left', padx=4)
+    ttk.Button(rb, text='Back up coding (snapshot)', command=on_backup).pack(side='left', padx=4)
+    ttk.Button(rb, text='Check state', command=lambda: on_root('status')).pack(side='left', padx=4)
 
-    # ============================ Tab 2: Apps ===================================================
+    rb2 = tk.Frame(c1, bg=PANEL)
+    rb2.pack(fill='x', padx=14, pady=(0, 14))
+    ttk.Button(rb2, text='Flash + Enable SSH (once)', style='Accent.TButton',
+               command=lambda: on_root('flash',
+                   'Flash the debug image and enable root SSH?\n\nThis REPROGRAMS the head unit and '
+                   'WIPES its coding and Digital Key pairings. Do this only once per car.',
+                   need_backup=True)).pack(side='left', padx=4)
+    ttk.Button(rb2, text='Enable (repair)', command=lambda: on_root('enable')).pack(side='left', padx=4)
+    ttk.Button(rb2, text='Fix refusing key', command=lambda: on_root('fix-key',
+               'Re-flash to install our root key? Use only if SSH opens but login is refused. It '
+               're-flashes (wipes coding again).', need_backup=True)).pack(side='left', padx=4)
+    ttk.Button(rb2, text='Disable', style='Danger.TButton', command=lambda: on_root('disable',
+               'Revert persistence and stop debug/SSH on this car?')).pack(side='left', padx=4)
+
+    # ========================= Tab 2: Apps (idrive7-apps) =======================================
     t_apps = ttk.Frame(nb)
-    nb.add(t_apps, text='  2. Apps  ')
-    sel = ttk.Frame(t_apps)
-    sel.pack(fill='x', **pad)
+    nb.add(t_apps, text='Apps')
+    c2 = card(t_apps)
+    eyebrow(c2, 'STEP 2  -  THE CUSTOM APPS')
+    title(c2, 'Install the MGU apps on the car')
+    sel = tk.Frame(c2, bg=PANEL)
+    sel.pack(fill='x', padx=12, pady=(2, 2))
     chosen = set(cfg.get('apps') or [a for a, _, _, exp in apps if not exp])
     app_vars = {}
-    for i, (aid, title, desc, exp) in enumerate(apps):
+    for i, (aid, t, desc, exp) in enumerate(apps):
         v = tk.BooleanVar(value=aid in chosen)
         app_vars[aid] = v
-        ttk.Checkbutton(sel, text=title + ('  (experimental)' if exp else ''), variable=v).grid(
-            row=i // 2, column=i % 2, sticky='w', padx=8, pady=1)
+        ttk.Checkbutton(sel, text=t + ('  (experimental)' if exp else ''), variable=v).grid(
+            row=i // 2, column=i % 2, sticky='w', padx=6, pady=1)
     r = (len(apps) + 1) // 2
-    lf = ttk.Frame(sel)
-    lf.grid(row=r, column=0, columnspan=2, sticky='w', **pad)
-    ttk.Label(lf, text='Language:').pack(side='left')
-    lang_box = ttk.Combobox(lf, state='readonly', width=24,
+    lf = tk.Frame(c2, bg=PANEL)
+    lf.pack(fill='x', padx=16, pady=(6, 2))
+    ttk.Label(lf, text='Language', style='CardMuted.TLabel').pack(side='left')
+    lang_box = ttk.Combobox(lf, state='readonly', width=22,
                             values=['%s - %s' % (l, LANGUAGE_NAMES.get(l, l)) for l in langs])
     lang_box.current(langs.index(cfg.get('language', 'en')) if cfg.get('language', 'en') in langs else 0)
-    lang_box.pack(side='left', padx=6)
+    lang_box.pack(side='left', padx=8)
 
     def set_all(on):
         for aid, v in app_vars.items():
             v.set(on and aid not in EXPERIMENTAL)
-    ttk.Button(lf, text='Select recommended', command=lambda: set_all(True)).pack(side='left', padx=6)
-    ttk.Button(lf, text='Select none', command=lambda: set_all(False)).pack(side='left')
+    ttk.Button(lf, text='Recommended', command=lambda: set_all(True)).pack(side='left', padx=6)
+    ttk.Button(lf, text='None', command=lambda: set_all(False)).pack(side='left')
     reboot_var = tk.BooleanVar(value=cfg.get('reboot', True))
-    ttk.Checkbutton(sel, text='Reboot the head unit at the end if needed (for the Doom controller gate)',
-                    variable=reboot_var).grid(row=r + 1, column=0, columnspan=2, sticky='w', **pad)
+    ttk.Checkbutton(c2, text='Reboot the head unit at the end if needed (for the Doom controller gate)',
+                    variable=reboot_var).pack(anchor='w', padx=16, pady=(4, 2))
 
-    ab = ttk.Frame(t_apps)
-    ab.pack(anchor='w', **pad)
-
-    def need_ssh():
-        s = find_ssh()
-        if not s:
-            raise InstallerError('The OpenSSH client is missing. Windows: Settings > Apps > Optional features '
-                                 '> add "OpenSSH Client".')
-        return s
+    ab = tk.Frame(c2, bg=PANEL)
+    ab.pack(fill='x', padx=14, pady=(8, 14))
 
     def on_test():
         _, key, ip, _ = conn_values()
@@ -775,13 +999,13 @@ def run_gui():
             messagebox.showwarning('Bimmhacks', 'Pick at least one app.')
             return
         if any(a in EXPERIMENTAL for a in picked) and not messagebox.askyesno(
-                'Experimental apps', 'You picked experimental apps (Engine Config / Transmission Config). '
-                'Engine Config can send control requests to the DME once a tune is selected in its '
-                'settings.\n\nInstall them anyway?'):
+                'Experimental apps', 'You picked experimental apps (Engine Config / Transmission '
+                'Config). Engine Config can send control requests to the DME once a tune is selected '
+                'in its settings.\n\nInstall them anyway?'):
             return
-        if not messagebox.askokcancel('Install', 'Install %d app(s) on the car at %s?\n\nEverything that is '
-                                      'changed is backed up first and can be undone with "Restore to stock".'
-                                      % (len(picked), ip)):
+        if not messagebox.askokcancel('Install', 'Install %d app(s) on the car at %s?\n\nEverything '
+                                      'changed is backed up first and can be undone with Restore to '
+                                      'stock.' % (len(picked), ip)):
             return
         reboot = reboot_var.get()
         def w():
@@ -795,54 +1019,166 @@ def run_gui():
 
     def on_restore():
         _, key, ip, _ = conn_values()
-        if not messagebox.askyesno('Restore to stock', 'Remove ALL custom apps and put every changed file '
-                                   'back exactly as it was before the first install?'):
+        if not messagebox.askyesno('Restore to stock', 'Remove ALL custom apps and put every changed '
+                                   'file back exactly as it was before the first install?'):
             return
         start(lambda: do_simple(need_ssh(), ip, key, 'restore', log), 'The car is back to stock.')
 
-    for text, fn in (('Test connection', on_test), ('Install / Update apps', on_install),
-                     ('Status', on_status), ('Restore to stock', on_restore)):
-        b = ttk.Button(ab, text=text, command=fn)
-        b.pack(side='left', padx=4, pady=8)
-        buttons.append(b)
+    ttk.Button(ab, text='Test connection', command=on_test).pack(side='left', padx=4)
+    ttk.Button(ab, text='Install / Update apps', style='Accent.TButton', command=on_install).pack(side='left', padx=4)
+    ttk.Button(ab, text='Status', command=on_status).pack(side='left', padx=4)
+    ttk.Button(ab, text='Restore to stock', style='Danger.TButton', command=on_restore).pack(side='left', padx=4)
 
-    # ============================ Tab 3: App Store ==============================================
+    # ========================= Tab 3: App Store =================================================
     t_store = ttk.Frame(nb)
-    nb.add(t_store, text='  3. App Store  ')
-    ttk.Label(t_store, justify='left', text=
-              'Install the on-car MGU App Store, so the client browses, installs and updates apps straight '
-              'from the car screen (Apps > Store) afterwards.\nNeeds internet at the car (USB Ethernet, LTE '
-              'stick, tethered phone or Wi-Fi). Restart the head unit once when it finishes.').pack(anchor='w', **pad)
+    nb.add(t_store, text='App Store')
+    c3 = card(t_store)
+    eyebrow(c3, 'STEP 3  -  ON-CAR STORE')
+    title(c3, 'Install the MGU App Store')
+    para(c3, 'The on-car Store lets the client browse, install and update apps from the car screen '
+             '(Apps > Store). It needs internet at the car (USB Ethernet, LTE stick, tethered phone '
+             'or Wi-Fi). Restart the head unit once when it finishes.')
     no_renderer_var = tk.BooleanVar(value=cfg.get('no_renderer', False))
     no_uplink_var = tk.BooleanVar(value=cfg.get('no_uplink', False))
-    ttk.Checkbutton(t_store, text='Leave out the renderer (the Store draws in software)',
-                    variable=no_renderer_var).pack(anchor='w', padx=12)
-    ttk.Checkbutton(t_store, text='Leave out the internet uplink component',
-                    variable=no_uplink_var).pack(anchor='w', padx=12)
-    sb = ttk.Frame(t_store)
-    sb.pack(anchor='w', **pad)
+    ttk.Checkbutton(c3, text='Leave out the renderer (the Store draws in software)',
+                    variable=no_renderer_var).pack(anchor='w', padx=16, pady=(4, 0))
+    ttk.Checkbutton(c3, text='Leave out the internet uplink component',
+                    variable=no_uplink_var).pack(anchor='w', padx=16)
+    sbf = tk.Frame(c3, bg=PANEL)
+    sbf.pack(fill='x', padx=14, pady=(10, 14))
 
     def on_store():
         _, key, ip, _ = conn_values()
         save_config(dict(load_config(), no_renderer=no_renderer_var.get(), no_uplink=no_uplink_var.get()))
-        if not messagebox.askokcancel('Install App Store', 'Install the MGU App Store on the car at %s?\n\n'
-                                      'The car needs internet for this.' % ip):
+        if not messagebox.askokcancel('Install App Store', 'Install the MGU App Store on the car at '
+                                      '%s?\n\nThe car needs internet for this.' % ip):
             return
         def w():
-            node, _ = preflight(log)
-            do_store_install(node, ip, key, no_renderer=no_renderer_var.get(),
+            do_store_install(need_node(), ip, key, no_renderer=no_renderer_var.get(),
                              no_uplink=no_uplink_var.get(), log=log)
         start(w, 'App Store installed. Restart the head unit to see its tile.')
-    b = ttk.Button(sb, text='Install the App Store', command=on_store)
-    b.pack(side='left', padx=4, pady=8)
-    buttons.append(b)
+    ttk.Button(sbf, text='Install the App Store', style='Accent.TButton', command=on_store).pack(side='left', padx=4)
 
-    # ---- log + progress ------------------------------------------------------------------------
-    progress = ttk.Progressbar(root, mode='indeterminate')
-    progress.pack(fill='x', **pad)
-    logbox = scrolledtext.ScrolledText(root, height=14, font=('Consolas' if IS_WIN else 'Courier', 9))
-    logbox.pack(fill='both', expand=True, **pad)
-    ttk.Label(root, text=CREDIT, foreground='#666', wraplength=800).pack(anchor='w', padx=8, pady=(0, 8))
+    # ========================= Tab 4: idrive-apps ===============================================
+    t_idr = ttk.Frame(nb)
+    nb.add(t_idr, text='idrive-apps')
+    c4 = card(t_idr)
+    eyebrow(c4, 'MORE APPS  -  ROBERTNISIPEANU/IDRIVE-APPS')
+    title(c4, 'Cluster & HUD maps (Waze on cluster)')
+    para(c4, 'The CarPlay / Android Auto map on the instrument cluster and the HUD, plus the cluster '
+             'renderer it needs. These install through the on-car Store (install the App Store first); '
+             'idrive-apps is a built-in Store source, so it appears there automatically.')
+    para(c4, 'Offline car? Stage the apps to a USB stick here, then install from Apps > Store > USB.')
+    stage_idr = tk.StringVar(value=cfg.get('stage_idr', ''))
+    srow = tk.Frame(c4, bg=PANEL)
+    srow.pack(fill='x', padx=16, pady=(6, 2))
+    ttk.Label(srow, text='Stage to (optional USB / folder)', style='CardMuted.TLabel').pack(side='left')
+    ttk.Entry(srow, textvariable=stage_idr, width=36).pack(side='left', padx=8)
+
+    def pick_stage(var):
+        d = filedialog.askdirectory(title='Folder or USB stick to stage the apps onto')
+        if d:
+            var.set(d)
+    ttk.Button(srow, text='Choose', command=lambda: pick_stage(stage_idr)).pack(side='left')
+    ib = tk.Frame(c4, bg=PANEL)
+    ib.pack(fill='x', padx=14, pady=(10, 14))
+
+    def on_idrive():
+        _, key, ip, _ = conn_values()
+        save_config(dict(load_config(), stage_idr=stage_idr.get().strip()))
+        if not messagebox.askokcancel('idrive-apps', 'Make idrive-apps available on the car at %s?\n\n'
+                                      'Installs the Store if needed; needs internet on this PC.' % ip):
+            return
+        def w():
+            do_install_apps_source(need_node(), ip, key, IDRIVE_APPS_REPO, 'idrive-apps (robertnisipeanu)',
+                                   stage_dir=stage_idr.get().strip() or None, log=log)
+        start(w, 'idrive-apps ready - install Waze on cluster from the car Store.')
+    ttk.Button(ib, text='Make idrive-apps available', style='Accent.TButton',
+               command=on_idrive).pack(side='left', padx=4)
+    ttk.Button(ib, text='Open repository', command=lambda: _open_url(
+        'https://github.com/robertnisipeanu/idrive-apps')).pack(side='left', padx=4)
+
+    # ========================= Tab 5: Bimmhacks Apps (ours) =====================================
+    t_our = ttk.Frame(nb)
+    nb.add(t_our, text='Bimmhacks Apps')
+    c5 = card(t_our)
+    eyebrow(c5, 'IN-HOUSE  -  DEVELOPED BY US')
+    title(c5, 'Bimmhacks Apps')
+    para(c5, 'Apps developed in-house by the Bimmhacks team (Mr. Wali). Point this at your own GitHub '
+             'repository of packaged apps; it installs through the on-car Store, the same way the other '
+             'sources do. Leave it blank until the repository is published.')
+    our_repo = tk.StringVar(value=cfg.get('our_repo', BIMMHACKS_APPS_REPO))
+    orow = tk.Frame(c5, bg=PANEL)
+    orow.pack(fill='x', padx=16, pady=(6, 2))
+    ttk.Label(orow, text='Source repo (owner/repo)', style='CardMuted.TLabel').pack(side='left')
+    ttk.Entry(orow, textvariable=our_repo, width=30).pack(side='left', padx=8)
+    stage_our = tk.StringVar(value=cfg.get('stage_our', ''))
+    orow2 = tk.Frame(c5, bg=PANEL)
+    orow2.pack(fill='x', padx=16, pady=(2, 2))
+    ttk.Label(orow2, text='Stage to (optional USB / folder)', style='CardMuted.TLabel').pack(side='left')
+    ttk.Entry(orow2, textvariable=stage_our, width=36).pack(side='left', padx=8)
+    ttk.Button(orow2, text='Choose', command=lambda: pick_stage(stage_our)).pack(side='left')
+    obf = tk.Frame(c5, bg=PANEL)
+    obf.pack(fill='x', padx=14, pady=(10, 14))
+
+    def on_our():
+        _, key, ip, _ = conn_values()
+        repo = our_repo.get().strip()
+        save_config(dict(load_config(), our_repo=repo, stage_our=stage_our.get().strip()))
+        if not repo:
+            messagebox.showinfo('Bimmhacks Apps', 'No repository set yet.\n\nEnter your own GitHub '
+                                '"owner/repo" of packaged apps once it is published, then install.')
+            return
+        if not re.match(r'^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$', repo):
+            messagebox.showwarning('Bimmhacks Apps', 'Enter the source as owner/repo, e.g. bimmhacks/apps.')
+            return
+        if not messagebox.askokcancel('Bimmhacks Apps', 'Make %s available on the car at %s?' % (repo, ip)):
+            return
+        def w():
+            do_install_apps_source(need_node(), ip, key, repo, 'Bimmhacks Apps',
+                                   stage_dir=stage_our.get().strip() or None, log=log)
+        start(w, 'Bimmhacks Apps source ready - install from the car Store.')
+    ttk.Button(obf, text='Make our apps available', style='Accent.TButton', command=on_our).pack(side='left', padx=4)
+
+    # ========================= Tab 6: Credits ===================================================
+    t_cred = ttk.Frame(nb)
+    nb.add(t_cred, text='Credits')
+    c6 = card(t_cred)
+    eyebrow(c6, 'CREDITS & LICENCES')
+    title(c6, 'Built on open-source work')
+    for what, who in CREDITS:
+        row = tk.Frame(c6, bg=PANEL)
+        row.pack(fill='x', padx=16, pady=2)
+        ttk.Label(row, text=what, style='Card.TLabel', width=34, anchor='w').pack(side='left')
+        ttk.Label(row, text=who, style='CardMuted.TLabel', anchor='w').pack(side='left')
+    para(c6, '')
+    para(c6, 'These apps are free and open source. Charge for installation and support, credit the '
+             'original authors, and tell clients the apps themselves are free. BMW\'s app SDK is never '
+             'shipped - it is read from the client\'s own car and deleted from the PC afterwards.')
+    cbf = tk.Frame(c6, bg=PANEL)
+    cbf.pack(fill='x', padx=14, pady=(10, 14))
+    ttk.Button(cbf, text='idrive7-apps', command=lambda: _open_url(
+        'https://github.com/cauliflowermossgrape/idrive7-apps')).pack(side='left', padx=4)
+    ttk.Button(cbf, text='ssh-root tool', command=lambda: _open_url(
+        'https://github.com/cauliflowermossgrape/idrive7-8-ssh-root')).pack(side='left', padx=4)
+    ttk.Button(cbf, text='mgu-store', command=lambda: _open_url(
+        'https://github.com/robertnisipeanu/mgu-store')).pack(side='left', padx=4)
+
+    # ---- console + progress ---------------------------------------------------------------------
+    progress = ttk.Progressbar(body, mode='indeterminate')
+    progress.pack(fill='x', padx=16, pady=(2, 2))
+    console = tk.Frame(body, bg=INK)
+    console.pack(fill='both', expand=True, padx=16, pady=(0, 6))
+    logbox = scrolledtext.ScrolledText(console, height=12, bg=INK, fg='#d6dbe4', insertbackground='#d6dbe4',
+                                       relief='flat', borderwidth=0,
+                                       font=('Consolas' if IS_WIN else 'DejaVu Sans Mono', 9))
+    logbox.pack(fill='both', expand=True, padx=8, pady=8)
+    foot = tk.Frame(body, bg=SURFACE)
+    foot.pack(fill='x', padx=16, pady=(0, 10))
+    tk.Label(foot, text='Bimmhacks by Mr. Wali', bg=SURFACE, fg=INK,
+             font=(base_font[0], 9, 'bold')).pack(side='left')
+    tk.Label(foot, text='  -  apps by cauliflowermossgrape (MIT), Store by Robert Nisipeanu & IterioDev '
+             '(GPL-3.0)', bg=SURFACE, fg=MUTED, font=(base_font[0], 9)).pack(side='left')
 
     def pump():
         try:
@@ -862,11 +1198,27 @@ def run_gui():
             pass
         root.after(100, pump)
 
-    log('Bimmhacks iDrive 7 App Installer v%s. Apps found: %d. Languages: %s'
-        % (VERSION, len(apps), ', '.join(langs)))
-    log('Tabs: 1 root access (once per car) -> 2 apps -> 3 the on-car App Store.')
+    # collect buttons for enable/disable during work
+    def collect(w):
+        for ch in w.winfo_children():
+            if isinstance(ch, ttk.Button):
+                buttons.append(ch)
+            collect(ch)
+    collect(body)
+
+    log('Bimmhacks iDrive 7 Flash & App Studio  v%s' % VERSION)
+    log('Flashing app developed by Mr. Wali. Apps: %d. Languages: %s.' % (len(apps), ', '.join(langs)))
+    log('Work left to right: Root access -> Apps -> App Store -> more sources.')
     root.after(100, pump)
     root.mainloop()
+
+
+def _open_url(url):
+    try:
+        import webbrowser
+        webbrowser.open(url)
+    except Exception:
+        pass
 
 
 # ----------------------------------------------------------------------------- command line
@@ -880,7 +1232,8 @@ def main(argv=None):
     ap.add_argument('action', nargs='?', default='gui',
                     choices=['gui', 'install', 'test', 'status', 'restore', 'apps',
                              'root-status', 'root-flash', 'root-enable', 'root-fix-key', 'root-disable',
-                             'detect-vin', 'store-install'])
+                             'detect-vin', 'backup-coding', 'store-install',
+                             'install-idrive-apps', 'install-our-apps', 'usb-repo'])
     ap.add_argument('apps', nargs='*', help='app ids for install (default: all non-experimental apps)')
     ap.add_argument('--key', help='root SSH private key (id_rsa from the root-access step)')
     ap.add_argument('--ip', help='head unit address (default: from connect.txt next to the key, else %s)' % DEFAULT_IP)
@@ -888,6 +1241,9 @@ def main(argv=None):
     ap.add_argument('--arch', default='id7', choices=ARCHES, help='head-unit variant (default: id7)')
     ap.add_argument('--gateway', default='auto', help="ENET gateway address, or 'auto' (default)")
     ap.add_argument('--language', default='en')
+    ap.add_argument('--out', help='backup-coding: folder to write the coding snapshot into')
+    ap.add_argument('--repo', help='install-our-apps / usb-repo: a GitHub owner/repo source')
+    ap.add_argument('--stage', help='install-*-apps: also stage the apps to this folder / USB for offline install')
     ap.add_argument('--no-reboot', action='store_true', help='do not reboot the unit at the end (controller gate loads at the next start)')
     ap.add_argument('--no-controller-gate', action='store_true', help='do not install the controller gate (Doom)')
     ap.add_argument('--no-renderer', action='store_true', help='store-install: leave out the renderer')
@@ -920,6 +1276,19 @@ def main(argv=None):
             vin = detect_vin(log, ip=a.ip, gateway=a.gateway, arch=a.arch)
             print('VIN: ' + vin if vin else 'VIN not detected (is the ENET cable in and the car awake?)')
             return
+        if a.action == 'backup-coding':
+            do_backup_coding(log, vin=a.vin, ip=a.ip, gateway=a.gateway, arch=a.arch, out_dir=a.out)
+            return
+
+        if a.action == 'usb-repo':
+            # staging to a folder needs only Node (no car, no ssh)
+            node = find_node()
+            if not node:
+                raise InstallerError('Node.js is not installed: get the LTS version from https://nodejs.org/')
+            if not a.stage:
+                ap.error('--stage <folder> is needed')
+            do_usb_repo(node, a.stage, (['github:' + a.repo] if a.repo else []), log=log)
+            return
 
         node, ssh = preflight(log)
         if a.action == 'store-install':
@@ -927,6 +1296,20 @@ def main(argv=None):
                 ap.error('--key is needed')
             do_store_install(node, a.ip or ip_from_key(a.key) or DEFAULT_IP, a.key,
                              no_renderer=a.no_renderer, no_uplink=a.no_uplink, log=log)
+            return
+        if a.action in ('install-idrive-apps', 'install-our-apps'):
+            if not a.key:
+                ap.error('--key is needed')
+            ip2 = a.ip or ip_from_key(a.key) or DEFAULT_IP
+            if a.action == 'install-idrive-apps':
+                do_install_apps_source(node, ip2, a.key, IDRIVE_APPS_REPO, 'idrive-apps (robertnisipeanu)',
+                                       stage_dir=a.stage, log=log)
+            else:
+                repo = a.repo or BIMMHACKS_APPS_REPO
+                if not repo:
+                    raise InstallerError('No "our apps" repository set. Pass --repo owner/repo, or set '
+                                         'BIMMHACKS_APPS_REPO.')
+                do_install_apps_source(node, ip2, a.key, repo, 'Bimmhacks Apps', stage_dir=a.stage, log=log)
             return
 
         if not a.key:

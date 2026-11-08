@@ -34,6 +34,22 @@ This project bundles three upstream repositories, each copied unchanged except w
   mgu-store GitHub releases at install time. The vendored file keeps its GPL header and is invoked
   as a separate process (arm's-length aggregation), not linked into the Python installer.
 
+## 4. idrive-apps (robertnisipeanu/idrive-apps) — not vendored
+
+- **Repository:** https://github.com/robertnisipeanu/idrive-apps (GPL-3.0)
+- Not copied into this repo: it is a built-in **mgu-store** source and is installed through the
+  on-car Store (online) or staged to USB with `mgu-install.js usb-repo github:robertnisipeanu/idrive-apps`
+  (offline). The installer's "idrive-apps" and "Bimmhacks Apps" tabs use that path, so nothing from
+  the repo needs to ship in the client package.
+
+## Bimmhacks additions (not upstream)
+
+- `installer/coding_backup.py` reads a diagnostic coding snapshot (CAFD versions / VIN / IP / faults)
+  over ENET by reusing the vendored `mgu7` package. It is a record of what to restore, not a
+  restorable coding backup.
+- `installer/bimmhacks_installer.py` is the window + CLI that drives all of the above. The flashing
+  app and installer were developed by **Mr. Wali**.
+
 ## Updating to newer upstream versions
 
 ```sh
