@@ -23,9 +23,9 @@ jobs:
           python -m py_compile installer/bimmhacks_installer.py installer/make_client_package.py
       - name: Build the client zip
         run: python installer/make_client_package.py
-      - name: Check the zip has no BMW SDK or built apps
+      - name: Check the zip has no BMW SDK, built apps, or client SSH keys
         run: |
-          ! unzip -l dist/*.zip | grep -E 'oap-sdk/|\.mgu$'
+          ! unzip -l dist/*.zip | grep -E 'oap-sdk/|\.mgu$|/enrollments/|/id_rsa( |$)'
       - uses: actions/upload-artifact@v4
         with:
           name: Bimmhacks-iDrive7-Installer

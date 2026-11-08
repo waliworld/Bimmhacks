@@ -16,12 +16,17 @@ OUT_DIR = os.path.join(REPO, 'dist')
 
 TOP_FILES = ['Install Bimmhacks Apps.cmd', 'Install Bimmhacks Apps.command', 'install.sh',
              'README.md', 'CLIENT-GUIDE.md', 'UPSTREAM.md']
-TREES = ['installer', 'idrive7-apps']
+TREES = ['installer', 'idrive7-apps', 'tools']
 SKIP_DIRS = {'.git', '.github', '__pycache__', 'node_modules', 'oap-sdk', 'dist', 'preview', 'backups',
-             'work', 'captures', '.font-cache'}
+             'work', 'captures', '.font-cache', 'build'}
 SKIP_PATHS = {'idrive7-apps/docs/media', 'idrive7-apps/docs/screens', 'idrive7-apps/kit/renderd/test',
-              'idrive7-apps/kit/renderd/build'}
-SKIP_EXT = ('.mgu', '.tgz', '.pyc', '.log', '.pem', '.key', '.wad')
+              'idrive7-apps/kit/renderd/build',
+              # the SSH-root tool keeps the shared flash assets (data/assets, needed) but never
+              # client-specific keys or logs
+              'tools/idrive7-8-ssh-root/data/enrollments', 'tools/idrive7-8-ssh-root/data/logs'}
+SKIP_EXT = ('.mgu', '.tgz', '.pyc', '.log', '.wad')
+# never ship a client's generated SSH key, whatever folder it is in
+SKIP_NAMES = {'id_rsa', 'id_rsa.pub', 'id_rsa.ppk', 'id_rsa.pkcs1.pem', 'id_rsa.pkcs8.pem'}
 EXECUTABLE = ('.sh', '.command', 'mgu-renderd')
 
 
@@ -39,7 +44,7 @@ def files():
             rel_d = os.path.relpath(d, REPO).replace(os.sep, '/')
             dirs[:] = sorted(x for x in dirs if x not in SKIP_DIRS and rel_d + '/' + x not in SKIP_PATHS)
             for n in sorted(names):
-                if not n.endswith(SKIP_EXT) and n != 'id_rsa':
+                if not n.endswith(SKIP_EXT) and n not in SKIP_NAMES:
                     yield rel_d + '/' + n
 
 

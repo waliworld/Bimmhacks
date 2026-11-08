@@ -84,6 +84,26 @@ if (-not (Get-Command ssh -ErrorAction SilentlyContinue) -and -not (Test-Path "$
     Read-Host 'Press Enter to close'; exit 1
 }
 
+# Enabling root SSH over ENET needs the 169.254.x.x link-local address, which Windows only
+# uses for a process running as Administrator. Offer to relaunch elevated.
+$admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltinRole]::Administrator)
+if (-not $admin) {
+    Write-Host ''
+    Write-Host '  The ROOT ACCESS step (enabling SSH over an ENET cable) needs Administrator rights.' -ForegroundColor Yellow
+    Write-Host '  Installing apps on an already-rooted car does not.' -ForegroundColor Yellow
+    $a = Read-Host '  Relaunch as Administrator now? (Y/n)'
+    if (-not $a -or $a.Trim().ToLower() -in @('y', 'yes')) {
+        $argLine = '-NoProfile -ExecutionPolicy Bypass -File "' + $MyInvocation.MyCommand.Path + '"'
+        if ($args) { $argLine += ' ' + ($args -join ' ') }
+        try {
+            Start-Process -Verb RunAs -FilePath 'powershell.exe' -ArgumentList $argLine
+            exit 0
+        } catch {
+            Write-Host '  Could not elevate; continuing without Administrator (root access may fail).' -ForegroundColor Yellow
+        }
+    }
+}
+
 Write-Host '  Python, Node.js and ssh found. Opening the installer window...' -ForegroundColor Green
 & $py.exe @($py.args + @($installer) + $args)
 if ($LASTEXITCODE -ne 0) { Read-Host 'The installer stopped with an error. Press Enter to close' }

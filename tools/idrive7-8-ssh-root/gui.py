@@ -1,0 +1,507 @@
+"""MGU iDrive SSH Tool - a small Tkinter front-end over ssh_enable.py.
+
+Three actions - Flash + Enable, Enable, Disable - plus VIN auto-detection over
+ENET. It drives the exact same code as the command line (it runs
+ssh_enable.main on a background thread and streams the log into the window).
+The root SSH key is written out (all formats) + a connect.txt during enroll;
+their location is printed in the log. Packages into a Windows .exe with
+PyInstaller (build_exe.bat).
+"""
+
+import os
+import queue
+import sys
+import threading
+
+import tkinter as tk
+from tkinter import messagebox, scrolledtext, ttk
+
+if getattr(sys, "frozen", False):
+    HERE = os.path.dirname(os.path.abspath(sys.executable))
+else:
+    HERE = os.path.dirname(os.path.abspath(__file__))
+if HERE not in sys.path:
+    sys.path.insert(0, HERE)
+
+
+class _NullWriter:
+    """Stand-in for sys.stdout/err. In a windowed (--noconsole) PyInstaller exe
+    sys.stdout and sys.stderr are None, so any print() before the GUI redirect
+    would raise and the exe would vanish on launch. Keep writes harmless."""
+
+    def write(self, *_):
+        pass
+
+    def flush(self):
+        pass
+
+
+if sys.stdout is None:
+    sys.stdout = _NullWriter()
+if sys.stderr is None:
+    sys.stderr = _NullWriter()
+
+import ssh_enable
+from i18n import Translator
+from mgu7 import discovery
+from mgu7.flash import ID7, ID8_BDC3, ID8_BCP
+
+ARCHES = (ID7, ID8_BDC3, ID8_BCP)
+# The flash contract MUST match the head unit. Flashing an ID8 with the ID7
+# image (or vice-versa) partially writes the wrong regions and leaves the unit
+# stuck in programming mode (issue #47). The software baseline alone (030 vs
+# 036) is not a reliable enough discriminator to auto-pick, so we make the user
+# choose their exact variant - there is no silent default.
+VARIANT_PROMPT = "— select your car —"
+VARIANT_CHOICES = (
+    (ID7, "ID7 — BDC2 / BDC3  (software 030.xxx)"),
+    (ID8_BDC3, "ID8 — BDC3  (software 036.xxx)"),
+    (ID8_BCP, "ID8 — BCP  (software 036.xxx)"),
+)
+_VARIANT_BY_LABEL = {label: code for code, label in VARIANT_CHOICES}
+
+# palette
+BG = "#f3f4f6"
+HEADER = "#14315c"
+HEADER_FG = "#ffffff"
+ACCENT = "#1f6feb"
+GREEN = "#1f9d55"
+RED = "#c23b3b"
+AMBER = "#d9822b"
+MUTED = "#64748b"
+CONSOLE_BG = "#0f131a"
+CONSOLE_FG = "#d6dbe5"
+
+
+class _QueueWriter:
+    """File-like object funnelling writes to a thread-safe queue."""
+
+    def __init__(self, q):
+        self.q = q
+        self.pending = ""
+
+    def write(self, text):
+        if text:
+            self.pending += text
+            while "\n" in self.pending:
+                line, self.pending = self.pending.split("\n", 1)
+                self.q.put(line + "\n")
+        return len(text)
+
+    def flush(self):
+        if self.pending:
+            self.q.put(self.pending)
+            self.pending = ""
+
+
+class App:
+    def __init__(self, root):
+        self.root = root
+        self.q = queue.Queue()
+        self.worker = None
+        self.i18n = Translator()
+        self._labels = []
+        self._history = []
+        self._is_busy = False
+
+        root.title("MGU iDrive SSH Tool")
+        root.configure(bg=BG)
+        root.minsize(760, 560)
+
+        self.vin = tk.StringVar()
+        self.gateway = tk.StringVar(value="auto")
+        self.mgu_ip = tk.StringVar()
+        self.arch = tk.StringVar(value="")  # empty until the user picks a variant
+        self.variant_label = tk.StringVar(value=VARIANT_PROMPT)
+        self.disable_debug = tk.BooleanVar(value=True)
+        self.unique_key = tk.BooleanVar(value=False)
+
+        self._style()
+        self._build()
+        self.root.after(100, self._drain)
+
+    # --- styling ----------------------------------------------------------
+
+    def _style(self):
+        st = ttk.Style()
+        try:
+            st.theme_use("clam")
+        except tk.TclError:
+            pass
+        st.configure("TFrame", background=BG)
+        st.configure("TLabel", background=BG, foreground="#1f2937", font=("Segoe UI", 10))
+        st.configure("Hint.TLabel", background=BG, foreground=MUTED, font=("Segoe UI", 9))
+        st.configure("TEntry", fieldbackground="#ffffff", padding=5)
+        st.configure("TMenubutton", background="#ffffff", padding=4)
+        st.configure("Card.TLabelframe", background=BG, bordercolor="#d1d5db")
+        st.configure("Card.TLabelframe.Label", background=BG, foreground=MUTED, font=("Segoe UI", 9, "bold"))
+
+        def button(name, bg, active):
+            st.configure(name, background=bg, foreground="#ffffff", font=("Segoe UI", 11, "bold"),
+                         padding=(16, 12), borderwidth=0, focuscolor=bg)
+            st.map(name, background=[("active", active), ("disabled", "#9aa4b2")])
+
+        button("Primary.TButton", ACCENT, "#1a5fd0")
+        button("Green.TButton", GREEN, "#17824a")
+        button("Red.TButton", RED, "#a93030")
+        button("Amber.TButton", AMBER, "#b46a1f")
+
+        # Hero: the one button most people ever need - big and unmissable.
+        st.configure("Hero.TButton", background=ACCENT, foreground="#ffffff",
+                     font=("Segoe UI", 16, "bold"), padding=(16, 22),
+                     borderwidth=0, focuscolor=ACCENT)
+        st.map("Hero.TButton", background=[("active", "#1a5fd0"), ("disabled", "#9aa4b2")])
+
+        # Smaller secondary buttons that sit under the hero.
+        def small_button(name, bg, active):
+            st.configure(name, background=bg, foreground="#ffffff",
+                         font=("Segoe UI", 10, "bold"), padding=(8, 7),
+                         borderwidth=0, focuscolor=bg)
+            st.map(name, background=[("active", active), ("disabled", "#9aa4b2")])
+
+        small_button("GreenS.TButton", GREEN, "#17824a")
+        small_button("RedS.TButton", RED, "#a93030")
+        small_button("AmberS.TButton", AMBER, "#b46a1f")
+        st.configure("Detect.TButton", background=HEADER, foreground="#ffffff",
+                     font=("Segoe UI", 9, "bold"), padding=(10, 6), borderwidth=0)
+        st.map("Detect.TButton", background=[("active", "#1d4273"), ("disabled", "#9aa4b2")])
+
+    # --- layout -----------------------------------------------------------
+
+    def _build(self):
+        header = tk.Frame(self.root, bg=HEADER)
+        header.pack(fill="x")
+        self._label(tk.Label, header, "MGU iDrive  SSH", bg=HEADER, fg=HEADER_FG,
+                 font=("Segoe UI Semibold", 16)).pack(side="left", padx=16, pady=12)
+        self._label(tk.Label, header, "BMW ID7 / ID8  •  root over ENET", bg=HEADER,
+                 fg="#9fb3d1", font=("Segoe UI", 9)).pack(side="left", pady=12)
+
+        language_frame = tk.Frame(header, bg=HEADER)
+        language_frame.pack(side="right", padx=12, pady=8)
+        self.language = tk.StringVar(value="English")
+        self.language_box = ttk.Combobox(language_frame, textvariable=self.language,
+            values=[data['name'] for data in self.i18n.catalogs.values()],
+            state="readonly", width=14)
+        self.language_box.pack(anchor="e")
+        self.language_box.bind("<<ComboboxSelected>>", self._change_language)
+        body = ttk.Frame(self.root, padding=16)
+        body.pack(fill="x")
+
+        # VIN row
+        vin_row = ttk.Frame(body)
+        vin_row.pack(fill="x")
+        self._label(ttk.Label, vin_row, "VIN", font=("Segoe UI", 10, "bold")).pack(side="left")
+        ttk.Entry(vin_row, textvariable=self.vin, width=24, font=("Consolas", 11)).pack(side="left", padx=8)
+        self.detect_btn = self._label(ttk.Button, vin_row, "Detect VIN", style="Detect.TButton", command=self.detect_vin)
+        self.detect_btn.pack(side="left")
+        self._label(ttk.Label, vin_row, "(auto-reads the VIN from the car)", style="Hint.TLabel").pack(side="left", padx=8)
+
+        # advanced row (compact, secondary)
+        adv = self._label(ttk.Labelframe, body, "CONNECTION (optional)", style="Card.TLabelframe", padding=8)
+        adv.pack(fill="x", pady=(12, 0))
+        self._label(ttk.Label, adv, "Gateway").grid(row=0, column=0, sticky="w", padx=(0, 6))
+        ttk.Entry(adv, textvariable=self.gateway, width=16).grid(row=0, column=1, sticky="w")
+        self._label(ttk.Label, adv, "MGU IP").grid(row=0, column=2, sticky="w", padx=(16, 6))
+        ttk.Entry(adv, textvariable=self.mgu_ip, width=16).grid(row=0, column=3, sticky="w")
+
+        # Your car - REQUIRED. No default: flashing the wrong variant bricks the
+        # unit into programming mode (issue #47), so the user must pick it.
+        car = self._label(ttk.Labelframe, body, "YOUR CAR (required before flashing)", style="Card.TLabelframe", padding=8)
+        car.pack(fill="x", pady=(12, 0))
+        self._label(ttk.Label, car, "Variant", font=("Segoe UI", 10, "bold")).pack(side="left")
+        ttk.OptionMenu(car, self.variant_label, self.variant_label.get(),
+                       *[label for _, label in VARIANT_CHOICES],
+                       command=self._on_variant).pack(side="left", padx=8)
+        self._label(ttk.Label, car,
+                  "Pick ID7 or ID8 to match your head unit. If you are not 100% sure, STOP and check - "
+                  "flashing the wrong one can leave the unit stuck in programming mode.",
+                  style="Hint.TLabel", justify="left", wraplength=1000).pack(side="left", padx=8)
+
+        # Primary one-click action - this is all most people ever need.
+        hero = ttk.Frame(body)
+        hero.pack(fill="x", pady=(16, 0))
+        self.btn_flash = self._label(ttk.Button, hero, "Flash + Enable", style="Hero.TButton", command=self.do_flash)
+        self.btn_flash.pack(fill="x")
+        self._label(ttk.Label, hero,
+                  "Start here - this is all you need. It flashes the debug image and turns on root SSH in one step.\n"
+                  "If the car connects afterwards but refuses the key, then use “Fix refusing SSH key” below.",
+                  style="Hint.TLabel", justify="left", wraplength=1100).pack(anchor="w", pady=(4, 0))
+
+        # Secondary actions (smaller), only needed in specific cases.
+        actions = ttk.Frame(body)
+        actions.pack(fill="x", pady=(12, 0))
+        actions.columnconfigure((0, 1, 2), weight=1, uniform="a")
+        self.btn_enable = self._label(ttk.Button, actions, "Enable", style="GreenS.TButton", command=self.do_enable)
+        self.btn_fix = self._label(ttk.Button, actions, "Fix refusing SSH key", style="AmberS.TButton", command=self.do_fix_key)
+        self.btn_disable = self._label(ttk.Button, actions, "Disable", style="RedS.TButton", command=self.do_disable)
+        self.btn_enable.grid(row=0, column=0, sticky="ew", padx=(0, 6))
+        self.btn_fix.grid(row=0, column=1, sticky="ew", padx=6)
+        self.btn_disable.grid(row=0, column=2, sticky="ew", padx=(6, 0))
+        self._label(ttk.Label, actions,
+                  "Enable: re-open SSH on an already-flashed unit (no flashing).      "
+                  "Fix refusing SSH key: login refused after a good flash.      "
+                  "Disable: undo persistence and stop SSH.",
+                  style="Hint.TLabel", justify="left", wraplength=1100).grid(row=1, column=0, columnspan=3, sticky="w", pady=(4, 0))
+
+        opt = ttk.Frame(body)
+        opt.pack(fill="x", pady=(10, 0))
+        self._label(ttk.Checkbutton, opt, "Turn debug mode off after enabling (clears the B7F8E5 DTC)",
+                        variable=self.disable_debug).pack(anchor="w")
+        self._label(ttk.Label, opt, "On = SSH stays up with debug off (recommended).  Off = SSH persistent but debug mode stays on.",
+                  style="Hint.TLabel", wraplength=720, justify="left").pack(anchor="w")
+        self._label(ttk.Checkbutton, opt, "Give this car its own unique SSH key  (advanced - NOT recommended)",
+                        variable=self.unique_key).pack(anchor="w", pady=(6, 0))
+        self._label(ttk.Label, opt, "Swaps the shared dev key for a per-car key. Can only be done ONCE - if you lose the key or reflash, you can't create a new identity. Leave off unless you know why you need it.",
+                  style="Hint.TLabel", wraplength=720, justify="left").pack(anchor="w")
+
+        self.action_buttons = [self.btn_flash, self.btn_enable, self.btn_disable, self.btn_fix]
+
+        # log-console header: label + a button to open the saved session logs
+        loghdr = ttk.Frame(self.root, padding=(16, 4, 16, 0))
+        loghdr.pack(fill="x")
+        ttk.Label(loghdr, text="Session log (saved to data\\logs\\):", style="Hint.TLabel").pack(side="left")
+        ttk.Button(loghdr, text="Open logs folder", command=self.open_logs_folder).pack(side="right")
+
+        # log console
+        console = ttk.Frame(self.root, padding=(16, 0, 16, 8))
+        console.pack(fill="both", expand=True)
+        self.out = scrolledtext.ScrolledText(console, height=16, wrap="word", font=("Consolas", 9),
+                                             bg=CONSOLE_BG, fg=CONSOLE_FG, insertbackground=CONSOLE_FG,
+                                             relief="flat", borderwidth=0, padx=10, pady=8)
+        self.out.pack(fill="both", expand=True)
+        self.out.configure(state="disabled")
+
+        self.status = self._label(tk.Label, self.root, "Ready.", anchor="w", bg="#e5e7eb",
+                               fg="#374151", font=("Segoe UI", 9), padx=10, pady=4)
+        self.status.pack(fill="x")
+
+    # --- helpers ----------------------------------------------------------
+
+    def _label(self, widget_type, parent, source, **kwargs):
+        widget = widget_type(parent, text=self.i18n.t(source), **kwargs)
+        self._labels.append((widget, source))
+        return widget
+
+    def _change_language(self, _event=None):
+        tag = next(tag for tag, data in self.i18n.catalogs.items()
+                   if data['name'] == self.language.get())
+        self.i18n.select(tag)
+        for widget, source in self._labels:
+            widget.configure(text=self.i18n.t(source))
+        self.status.configure(text=self.i18n.t("Working…" if self._is_busy else "Ready."))
+        # Re-render from raw history; switching languages does not lose diagnostic data.
+        self.out.configure(state="normal")
+        self.out.delete("1.0", "end")
+        for text in self._history:
+            self.out.insert("end", self.i18n.log(text))
+        self.out.see("end")
+        self.out.configure(state="disabled")
+
+    def _append(self, text):
+        self._history.append(text)
+        self.out.configure(state="normal")
+        self.out.insert("end", self.i18n.log(text))
+        self.out.see("end")
+        self.out.configure(state="disabled")
+
+    def open_logs_folder(self):
+        """Open the folder holding the saved session logs (creating it if the
+        tool has not been run yet), so a log is easy to attach to an issue."""
+        folder = os.path.join(HERE, "data", "logs")
+        try:
+            os.makedirs(folder, exist_ok=True)
+        except OSError:
+            pass
+        try:
+            if sys.platform == "win32":
+                os.startfile(folder)  # noqa: S606 - open in Explorer
+            elif sys.platform == "darwin":
+                import subprocess
+                subprocess.Popen(["open", folder])
+            else:
+                import subprocess
+                subprocess.Popen(["xdg-open", folder])
+        except Exception as e:  # noqa: BLE001
+            messagebox.showinfo("Logs folder", "Session logs are saved in:\n%s\n\n(%s)" % (folder, e))
+
+    def _drain(self):
+        try:
+            while True:
+                self._append(self.q.get_nowait())
+        except queue.Empty:
+            pass
+        self.root.after(100, self._drain)
+
+    def _busy(self, on):
+        self._is_busy = on
+        state = "disabled" if on else "normal"
+        for b in self.action_buttons:
+            b.configure(state=state)
+        self.detect_btn.configure(state=state)
+        self.status.configure(text=self.i18n.t("Working…" if on else "Ready."))
+
+    def _common_args(self):
+        args = ["--yes"]
+        if self.vin.get().strip():
+            args += ["--vin", self.vin.get().strip()]
+        if self.gateway.get().strip():
+            args += ["--gateway", self.gateway.get().strip()]
+        if self.mgu_ip.get().strip():
+            args += ["--mgu-ip", self.mgu_ip.get().strip()]
+        if self.arch.get() in ARCHES:
+            args += ["--arch", self.arch.get()]
+        return args
+
+    def _on_variant(self, label):
+        """Map the friendly menu label back to the arch code the CLI expects."""
+        self.arch.set(_VARIANT_BY_LABEL.get(label, ""))
+
+    def _require_variant(self):
+        """True if a head-unit variant is selected; otherwise warn and return False.
+        Flashing the wrong variant bricks the unit into programming mode (#47)."""
+        if self.arch.get() in ARCHES:
+            return True
+        messagebox.showerror(
+            "Select your car first",
+            "Choose your head-unit variant (ID7, ID8 BDC3, or ID8 BCP) under "
+            "\"YOUR CAR\" before flashing.\n\n"
+            "There is no default on purpose: flashing the wrong variant partially "
+            "writes the wrong image and can leave the unit stuck in programming mode.")
+        return False
+
+    def _run(self, argv, label):
+        if self.worker and self.worker.is_alive():
+            return
+        self._busy(True)
+        self._append("\n$ ssh_enable %s\n" % " ".join(argv))
+
+        def task():
+            saved_out, saved_err = sys.stdout, sys.stderr
+            sys.stdout = sys.stderr = _QueueWriter(self.q)
+            rc = 1
+            try:
+                rc = ssh_enable.main(argv)
+            except SystemExit as e:
+                self.q.put("\n%s\n" % e)
+                rc = e.code if isinstance(e.code, int) else 1
+            except Exception as e:  # noqa: BLE001 - surface everything to the log
+                self.q.put("\nERROR: %s\n" % e)
+            finally:
+                sys.stdout.flush()
+                sys.stdout, sys.stderr = saved_out, saved_err
+                self.q.put("\n[%s finished, exit %s]\n" % (label, rc))
+                self.root.after(0, lambda: self._busy(False))
+
+        self.worker = threading.Thread(target=task, daemon=True)
+        self.worker.start()
+
+    # --- actions ----------------------------------------------------------
+
+    def _persist_args(self):
+        args = ["--persist"]
+        if not self.disable_debug.get():
+            args.append("--keep-debug")
+        args.append("--unique-key" if self.unique_key.get() else "--no-unique-key")
+        return args
+
+    def do_enable(self):
+        self._run(["enable"] + self._persist_args() + self._common_args(), "enable")
+
+    def do_flash(self):
+        if not self._require_variant():
+            return
+        if not self.vin.get().strip():
+            messagebox.showerror(self.i18n.t("VIN required"),
+                                 self.i18n.t("Flashing writes the VIN to the unit, so it is required.\n"
+                                 "Enter it or click Detect VIN first."))
+            return
+        if not messagebox.askyesno(
+            self.i18n.t("Flash the debug image?"),
+            self.i18n.t("This puts the head unit into programming mode and reboots it.\n\n"
+            "VIN %s will be written to the unit.\n\nContinue?") % self.vin.get().strip()):
+            return
+        self._run(["flash"] + self._persist_args() + self._common_args(), "flash")
+
+    def do_fix_key(self):
+        if not self._require_variant():
+            return
+        if not self.vin.get().strip():
+            messagebox.showerror("VIN required",
+                                 "Fix-key re-flashes the debug image (writing the VIN to the unit),\n"
+                                 "so the VIN is required. Enter it or click Detect VIN first.")
+            return
+        if not messagebox.askyesno(
+            "Fix the refusing SSH key?",
+            "For units that flash + enroll fine and open port 22, but still refuse\n"
+            "root login because their stock key differs.\n\n"
+            "This re-flashes the debug image carrying OUR key in the one unsigned\n"
+            "region (replacing debugCA). It only changes that region's bytes, so the\n"
+            "worst case is the key not persisting - not a brick. The head unit enters\n"
+            "programming mode and reboots, and (like any flash) CAFD coding is cleared;\n"
+            "restore it from your backup.\n\n"
+            "VIN %s will be written to the unit.\n\nContinue?" % self.vin.get().strip()):
+            return
+        self._run(["fix-key"] + self._persist_args() + self._common_args(), "fix-key")
+
+    def do_disable(self):
+        if not messagebox.askyesno(self.i18n.t("Disable SSH?"),
+                                   self.i18n.t("Revert SSH to stock and stop debug mode on the head unit?")):
+            return
+        self._run(["disable"] + self._common_args(), "disable")
+
+    def detect_vin(self):
+        if self.worker and self.worker.is_alive():
+            return
+        self._busy(True)
+        self._append("\nScanning for an ENET gateway (UDP 6811)…\n")
+
+        def task():
+            try:
+                gws = discovery.discover(log=lambda *a, **k: self.q.put(" ".join(str(x) for x in a) + "\n"))
+            except Exception as e:  # noqa: BLE001
+                gws = []
+                self.q.put("Discovery failed: %s\n" % e)
+
+            def apply():
+                if gws:
+                    g = gws[0]
+                    if g.vin:
+                        self.vin.set(g.vin)
+                    self.gateway.set(g.ip)
+                    self.q.put("Found gateway %s | VIN: %s\n" % (g.ip, g.vin or "not reported"))
+                    if len(gws) > 1:
+                        self.q.put("(%d gateways responded; using the first)\n" % len(gws))
+                else:
+                    self.q.put("No ENET gateway responded. Check the cable/adapter and that the car is awake.\n")
+                self._busy(False)
+
+            self.root.after(0, apply)
+
+        self.worker = threading.Thread(target=task, daemon=True)
+        self.worker.start()
+
+
+def main():
+    try:
+        root = tk.Tk()
+        App(root)
+        root.mainloop()
+    except Exception:
+        # A windowed exe would otherwise just disappear - leave a trace and,
+        # if possible, show it.
+        import traceback
+        tb = traceback.format_exc()
+        try:
+            with open(os.path.join(HERE, "mgu-ssh-error.log"), "w", encoding="utf-8") as f:
+                f.write(tb)
+        except Exception:
+            pass
+        try:
+            messagebox.showerror("MGU-SSH failed to start", tb)
+        except Exception:
+            pass
+        raise
+
+
+if __name__ == "__main__":
+    main()

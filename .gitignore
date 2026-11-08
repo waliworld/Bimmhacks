@@ -2,11 +2,17 @@
 oap-sdk/
 dist/
 *.mgu
-# SSH keys / client data
+# Per-car SSH keys and logs written by the root-access tool: never commit
+tools/idrive7-8-ssh-root/data/enrollments/
+tools/idrive7-8-ssh-root/data/logs/
 id_rsa
-*.pem
-*.key
+id_rsa.*
+*.ppk
 .bimmhacks-installer.json
 __pycache__/
 *.pyc
 .DS_Store
+
+# but DO keep the shared flash assets the root-access tool needs
+!tools/idrive7-8-ssh-root/data/assets/
+!tools/idrive7-8-ssh-root/data/assets/*

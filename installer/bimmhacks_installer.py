@@ -1,31 +1,40 @@
 #!/usr/bin/env python3
 """Bimmhacks iDrive 7 App Installer.
 
-One-click installer for the MGU (iDrive 7) custom apps in ../idrive7-apps. It does every step of
-the upstream guide for the client, against the client's own car:
+One tool that takes a client from a stock car to installed apps, in three stages:
 
-  1. connects to the head unit over SSH (root key from the idrive7-8-ssh-root tool)
-  2. copies BMW's x_call app off THAT car and extracts the oap-sdk from it
-     (BMW's SDK is copyrighted and is never shipped with this installer)
-  3. builds the chosen apps in the chosen language and packs the car kit
-  4. copies the kit to the car, verifies it, runs the read-only check, then installs
-  5. deletes the local SDK copy and build output again (they contain BMW's code)
+  A. ROOT ACCESS - enable root SSH on the head unit over an ENET cable, with the bundled
+     idrive7-8-ssh-root tool. One flash per unit; it writes out the car's SSH key for every
+     later step. (Skip this if the car is already rooted and you have its key.)
+  B. APPS - the MGU custom apps, against the client's own car:
+       1. connects to the head unit over SSH (the root key from stage A)
+       2. copies BMW's x_call app off THAT car and extracts the oap-sdk from it
+          (BMW's SDK is copyrighted and is never shipped with this installer)
+       3. builds the chosen apps in the chosen language and packs the car kit
+       4. copies the kit to the car, verifies it, runs the read-only check, then installs
+       5. deletes the local SDK copy and build output again (they contain BMW's code)
+  C. APP STORE - installs the on-car MGU App Store (mgu-store), so the client browses,
+     installs and updates apps from the car's own screen afterwards.
 
 Status and "back to stock" (restore) work the same way.
 
     python bimmhacks_installer.py                 # the window (default)
     python bimmhacks_installer.py install --key id_rsa [--ip 169.254.36.47] [--language en] [apps ...]
     python bimmhacks_installer.py test|status|restore --key id_rsa [--ip ...]
+    python bimmhacks_installer.py root-status|root-flash|root-enable|root-fix-key [--vin ...] [--ip ...]
+    python bimmhacks_installer.py store-install --key id_rsa [--ip ...]
     python bimmhacks_installer.py apps            # list the apps
 
 Needs Python 3.6+, Node.js 14+ and the OpenSSH client (built into Windows 10/11, macOS, Linux).
-No pip packages.
+Stage A (root access) also needs the `cryptography` Python package; the installer offers to add
+it. Stage C (App Store) needs internet at the car (or a prepared USB stick).
 """
 import argparse, io, json, os, queue, re, shutil, stat, subprocess, sys, tarfile, tempfile, threading
 
-VERSION = '1.0.0'
+VERSION = '1.1.0'
 HERE = os.path.dirname(os.path.abspath(__file__))
-ROOT = os.environ.get('BIMMHACKS_APPS_ROOT') or os.path.join(os.path.dirname(HERE), 'idrive7-apps')
+REPO = os.path.dirname(HERE)
+ROOT = os.environ.get('BIMMHACKS_APPS_ROOT') or os.path.join(REPO, 'idrive7-apps')
 TOOLS = os.path.join(ROOT, 'kit', 'tools')
 SDK_DIR = os.path.join(ROOT, 'oap-sdk')
 DIST = os.path.join(ROOT, 'dist')
@@ -34,6 +43,14 @@ DEFAULT_IP = '169.254.36.47'                # the unit's address with the idrive
 CONFIG = os.path.join(os.path.expanduser('~'), '.bimmhacks-installer.json')
 IS_WIN = os.name == 'nt'
 NULL = 'NUL' if IS_WIN else '/dev/null'
+
+# bundled tools (see UPSTREAM.md / tools/*/LICENSE)
+SSHROOT_DIR = os.environ.get('BIMMHACKS_SSHROOT_DIR') or os.path.join(REPO, 'tools', 'idrive7-8-ssh-root')
+SSHROOT_PY = os.path.join(SSHROOT_DIR, 'ssh_enable.py')
+SSHROOT_ENROLL = os.path.join(SSHROOT_DIR, 'data', 'enrollments')
+STORE_DIR = os.environ.get('BIMMHACKS_STORE_DIR') or os.path.join(REPO, 'tools', 'mgu-store')
+STORE_JS = os.path.join(STORE_DIR, 'mgu-install.js')
+ARCHES = ('id7', 'id8-bdc3', 'id8-bcp')
 
 # apps that send control / write requests or are marked experimental upstream: off unless ticked
 EXPERIMENTAL = {'live_adjustments': 'sends DME requests once a tune is picked',
@@ -338,6 +355,161 @@ def cleanup(log):
     log("Removed the local copy of BMW's SDK and the build output.")
 
 
+# ------------------------------------------------------- stage A: root access (idrive7-8-ssh-root)
+
+def have_cryptography():
+    return subprocess.run([sys.executable, '-c', 'import cryptography'],
+                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+
+
+def ensure_cryptography(log, install=True):
+    """The SSH-root tool needs the `cryptography` package. Install it into the user site if missing."""
+    if not os.path.isfile(SSHROOT_PY):
+        raise InstallerError('The root-access tool is missing (expected it in %s).' % SSHROOT_DIR)
+    if have_cryptography():
+        return
+    if not install:
+        raise InstallerError("The 'cryptography' Python package is needed for root access. "
+                             "Install it with:  %s -m pip install --user cryptography" % os.path.basename(sys.executable))
+    log("Installing the 'cryptography' package (one-time, for root access) ...")
+    p = subprocess.Popen([sys.executable, '-m', 'pip', 'install', '--user', 'cryptography>=41.0'],
+                         stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    for raw in iter(p.stdout.readline, b''):
+        log('  pip> ' + raw.decode('utf-8', 'replace').rstrip('\r\n'))
+    p.wait()
+    if not have_cryptography():
+        raise InstallerError("Could not install 'cryptography' automatically. Install it by hand:\n"
+                             "  %s -m pip install --user cryptography" % os.path.basename(sys.executable))
+    log("'cryptography' installed.")
+
+
+def newest_enrolled_key(vin=None):
+    """Newest data/enrollments/<VIN>/id_rsa written by the SSH-root tool (preferring a given VIN)."""
+    best, best_mtime = None, -1
+    if not os.path.isdir(SSHROOT_ENROLL):
+        return None
+    for d in os.listdir(SSHROOT_ENROLL):
+        key = os.path.join(SSHROOT_ENROLL, d, 'id_rsa')
+        if not os.path.isfile(key):
+            continue
+        if vin and d.upper() != vin.upper():
+            continue
+        m = os.path.getmtime(key)
+        if m > best_mtime:
+            best, best_mtime = key, m
+    if best is None and vin:            # asked for a VIN with no key: fall back to any
+        return newest_enrolled_key(None)
+    return best
+
+
+def run_ssh_root(action, log, vin=None, ip=None, gateway='auto', arch='id7', persist=False,
+                 keep_debug=False, unique_key=False, verbose=False):
+    """Run the bundled ssh_enable.py as a subprocess, streaming its output. -> exit code."""
+    ensure_cryptography(log)
+    argv = [sys.executable, SSHROOT_PY, action, '--yes']
+    if vin:
+        argv += ['--vin', vin]
+    if ip:
+        argv += ['--mgu-ip', ip]
+    if gateway and gateway != 'auto':
+        argv += ['--gateway', gateway]
+    if arch and arch != 'id7':
+        argv += ['--arch', arch]
+    if persist:
+        argv.append('--persist')
+    if keep_debug:
+        argv.append('--keep-debug')
+    if unique_key:
+        argv.append('--unique-key')
+    if verbose:
+        argv.append('--verbose')
+    env = dict(os.environ)
+    env['PYTHONIOENCODING'] = 'utf-8'
+    env['PYTHONUNBUFFERED'] = '1'
+    p = subprocess.Popen(argv, cwd=SSHROOT_DIR, env=env, stdin=subprocess.DEVNULL,
+                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    for raw in iter(p.stdout.readline, b''):
+        line = raw.decode('utf-8', 'replace').rstrip('\r\n')
+        if 'DeprecationWarning' in line or 'utcnow()' in line:
+            continue
+        log('  root> ' + line)
+    return p.wait()
+
+
+def do_root(action, log, vin=None, ip=None, gateway='auto', arch='id7'):
+    """Root-access actions. Returns the path of the SSH key when one was written, else None."""
+    if IS_WIN:
+        log('Note: on Windows, run this installer as Administrator so the ENET link-local address is used.')
+    flashing = action in ('flash', 'fix-key')
+    if flashing and not (vin and re.match(r'^[A-HJ-NPR-Z0-9]{17}$', vin.upper())):
+        raise InstallerError('A valid 17-character VIN is needed to flash. Use "Detect VIN", or type it in.')
+    if flashing:
+        log('WARNING: flashing reprograms the head unit and wipes its coding and BMW Digital Key pairings.')
+        log('Back up the coding first (BimmerCode / E-Sys). This is a one-time step per car.')
+    names = {'status': 'Reading the head unit state (read-only) ...',
+             'flash': 'Flashing the debug image and enabling root SSH (this reboots the unit; a few minutes) ...',
+             'enable': 'Re-opening SSH on an already-flashed unit (no flashing) ...',
+             'fix-key': 'Re-flashing to install our root key (repair for refused logins) ...',
+             'disable': 'Reverting persistence and stopping debug/SSH ...'}
+    log(names.get(action, 'Running root-access action: %s' % action))
+    code = run_ssh_root(action, log, vin=vin, ip=ip, gateway=gateway, arch=arch,
+                        persist=(action in ('flash', 'enable')))
+    if code:
+        raise InstallerError('The root-access step reported a problem (exit %d; see the log above).' % code)
+    if action in ('flash', 'enable', 'fix-key'):
+        key = newest_enrolled_key(vin)
+        if key:
+            log('Root SSH is enabled. The car SSH key is: %s' % key)
+            return key
+        log('Done, but no SSH key file was found under %s.' % SSHROOT_ENROLL)
+    return None
+
+
+def detect_vin(log, ip=None, gateway='auto', arch='id7'):
+    """Read the VIN from the car over ENET via the SSH-root tool's status. -> VIN or None."""
+    ensure_cryptography(log)
+    lines = []
+    def grab(m):
+        lines.append(m)
+        log(m)
+    code = run_ssh_root('status', grab, ip=ip, gateway=gateway, arch=arch)
+    for m in lines:
+        v = re.search(r'\b([A-HJ-NPR-Z0-9]{17})\b', m)
+        if v:
+            return v.group(1)
+    return None
+
+
+# -------------------------------------------------------------- stage C: the App Store (mgu-store)
+
+def do_store_install(node, ip, key, no_renderer=False, no_uplink=False, log=print):
+    """Install the on-car MGU App Store with the bundled mgu-install.js."""
+    if not os.path.isfile(STORE_JS):
+        raise InstallerError('The App Store installer is missing (expected it in %s).' % STORE_DIR)
+    if not key or not os.path.isfile(key):
+        raise InstallerError('The car SSH key is needed. Do the root-access step first, or pick the key.')
+    log('Installing the MGU App Store on the head unit (needs internet at the car) ...')
+    argv = [node, STORE_JS, 'first-install', '--identity', key, '--no-restart-prompt']
+    if ip:
+        argv += ['--host', ip]
+    if no_renderer:
+        argv.append('--no-renderer')
+    if no_uplink:
+        argv.append('--no-uplink')
+    p = subprocess.Popen(argv, cwd=STORE_DIR, stdin=subprocess.DEVNULL,
+                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    for raw in iter(p.stdout.readline, b''):
+        line = raw.decode('utf-8', 'replace').rstrip('\r\n')
+        log('  store> ' + line)
+    code = p.wait()
+    if code == 2:
+        raise InstallerError('The App Store installer refused the request or the usage was wrong (see above).')
+    if code:
+        raise InstallerError('The App Store install failed (exit %d; see above).' % code)
+    log('App Store installed. Restart the head unit (Settings on the car, or power-cycle) to see its tile.')
+    log('Afterwards the client installs and updates apps from the car screen - Apps > Store.')
+
+
 def do_install(ssh, node, ip, key, apps, language, reboot=True, controller_gate=True, keep_build=False, log=print):
     if not apps:
         raise InstallerError('Pick at least one app.')
@@ -408,59 +580,168 @@ def run_gui():
     langs = list_languages()
     q = queue.Queue()
     busy = {'on': False}
+    buttons = []
 
     root = tk.Tk()
     root.title('Bimmhacks iDrive 7 App Installer  v' + VERSION)
-    root.minsize(780, 640)
+    root.minsize(820, 720)
     try:
         ttk.Style().theme_use('vista' if IS_WIN else 'clam')
     except tk.TclError:
         pass
-
     pad = {'padx': 8, 'pady': 4}
+
     head = ttk.Frame(root)
     head.pack(fill='x', **pad)
     ttk.Label(head, text='Bimmhacks iDrive 7 Apps', font=('Segoe UI', 16, 'bold')).pack(anchor='w')
-    ttk.Label(head, text='Car parked, ignition on, battery charger connected. Connect the PC to the car, '
-                         'then fill in the two fields below.').pack(anchor='w')
+    ttk.Label(head, text='Car parked, ignition on, charger connected, PC connected to the car. '
+                         'Work through the tabs left to right.').pack(anchor='w')
 
-    conn = ttk.LabelFrame(root, text='1. Car connection')
+    # ---- shared connection fields --------------------------------------------------------------
+    conn = ttk.LabelFrame(root, text='Car connection (shared by every tab)')
     conn.pack(fill='x', **pad)
+    vin_var = tk.StringVar(value=cfg.get('vin', ''))
     key_var = tk.StringVar(value=cfg.get('key', ''))
     ip_var = tk.StringVar(value=cfg.get('ip', DEFAULT_IP))
-    ttk.Label(conn, text='Root SSH key (id_rsa):').grid(row=0, column=0, sticky='w', **pad)
-    ttk.Entry(conn, textvariable=key_var, width=48).grid(row=0, column=1, sticky='we', **pad)
+    arch_var = tk.StringVar(value=cfg.get('arch', 'id7'))
+
+    ttk.Label(conn, text='VIN (17 chars):').grid(row=0, column=0, sticky='w', **pad)
+    ttk.Entry(conn, textvariable=vin_var, width=22).grid(row=0, column=1, sticky='w', **pad)
+    ttk.Label(conn, text='Head unit variant:').grid(row=0, column=2, sticky='e', **pad)
+    arch_box = ttk.Combobox(conn, state='readonly', width=10, values=list(ARCHES))
+    arch_box.current(ARCHES.index(arch_var.get()) if arch_var.get() in ARCHES else 0)
+    arch_box.grid(row=0, column=3, sticky='w', **pad)
+
+    ttk.Label(conn, text='Root SSH key (id_rsa):').grid(row=1, column=0, sticky='w', **pad)
+    ttk.Entry(conn, textvariable=key_var, width=48).grid(row=1, column=1, columnspan=2, sticky='we', **pad)
 
     def browse():
-        p = filedialog.askopenfilename(title='The id_rsa from the root tool (data\\enrollments\\<VIN>\\id_rsa)')
+        start_dir = SSHROOT_ENROLL if os.path.isdir(SSHROOT_ENROLL) else REPO
+        p = filedialog.askopenfilename(title='The car SSH key (id_rsa)', initialdir=start_dir)
         if p:
             key_var.set(p)
             ip = ip_from_key(p)
             if ip:
                 ip_var.set(ip)
-    ttk.Button(conn, text='Browse...', command=browse).grid(row=0, column=2, **pad)
-    ttk.Label(conn, text='Head unit IP address:').grid(row=1, column=0, sticky='w', **pad)
-    ttk.Entry(conn, textvariable=ip_var, width=20).grid(row=1, column=1, sticky='w', **pad)
+    ttk.Button(conn, text='Browse...', command=browse).grid(row=1, column=3, **pad)
+    ttk.Label(conn, text='Head unit IP address:').grid(row=2, column=0, sticky='w', **pad)
+    ttk.Entry(conn, textvariable=ip_var, width=20).grid(row=2, column=1, sticky='w', **pad)
+    ttk.Label(conn, text='(ENET: 169.254.36.47)', foreground='#777').grid(row=2, column=2, sticky='w', **pad)
     conn.columnconfigure(1, weight=1)
 
-    sel = ttk.LabelFrame(root, text='2. Apps and language')
+    nb = ttk.Notebook(root)
+    nb.pack(fill='x', **pad)
+
+    # ---- helpers -------------------------------------------------------------------------------
+    def log(msg):
+        q.put(('log', msg))
+
+    def save():
+        picked = [a for a, v in app_vars.items() if v.get()]
+        save_config({'vin': vin_var.get().strip().upper(), 'key': key_var.get().strip().strip('"'),
+                     'ip': ip_var.get().strip(), 'arch': ARCHES[arch_box.current()] if arch_box.current() >= 0 else 'id7',
+                     'apps': picked, 'language': langs[lang_box.current()] if lang_box.current() >= 0 else 'en',
+                     'reboot': reboot_var.get()})
+
+    def conn_values():
+        save()
+        return (vin_var.get().strip().upper(), key_var.get().strip().strip('"'),
+                ip_var.get().strip(), ARCHES[arch_box.current()] if arch_box.current() >= 0 else 'id7')
+
+    def start(work_fn, done_msg):
+        if busy['on']:
+            return
+        busy['on'] = True
+        progress.start(12)
+        for b in buttons:
+            b.state(['disabled'])
+
+        def work():
+            try:
+                work_fn()
+                q.put(('done', (True, done_msg)))
+            except InstallerError as e:
+                log('ERROR: ' + str(e))
+                q.put(('done', (False, str(e))))
+            except Exception as e:  # keep the window alive, show what happened
+                log('ERROR: %s: %s' % (type(e).__name__, e))
+                q.put(('done', (False, 'Unexpected error: %s' % e)))
+        threading.Thread(target=work, daemon=True).start()
+
+    # ============================ Tab 1: Root access ============================================
+    t_root = ttk.Frame(nb)
+    nb.add(t_root, text='  1. Root access  ')
+    ttk.Label(t_root, text='Enable root SSH on a stock car over an ENET cable. Do this ONCE per head unit; '
+              'it writes the car SSH key the other tabs use.\nAlready rooted and have the key? Skip to tab 2 '
+              'and pick it with Browse.', justify='left').pack(anchor='w', **pad)
+    warn = ttk.Label(t_root, foreground='#a00', justify='left',
+                     text='Flashing wipes the head unit coding and BMW Digital Key pairings. Back up the coding '
+                          '(BimmerCode / E-Sys) first. Windows: run this installer as Administrator.')
+    warn.pack(anchor='w', **pad)
+    rb = ttk.Frame(t_root)
+    rb.pack(anchor='w', **pad)
+
+    def on_detect_vin():
+        _, _, ip, arch = conn_values()
+        def w():
+            v = detect_vin(log, ip=ip or None, arch=arch)
+            if v:
+                vin_var.set(v)
+                log('Detected VIN: ' + v)
+            else:
+                log('VIN not detected. Is the ENET cable in and the car awake?')
+        start(w, 'VIN read - see the log.')
+
+    def on_root(action, confirm=None):
+        vin, _, ip, arch = conn_values()
+        if confirm and not messagebox.askyesno('Root access', confirm):
+            return
+        def w():
+            key = do_root(action, log, vin=vin or None, ip=ip or None, arch=arch)
+            if key:
+                key_var.set(key)
+                ipp = ip_from_key(key)
+                if ipp:
+                    ip_var.set(ipp)
+        start(w, 'Root-access step finished - see the log.')
+
+    for text, action, confirm in (
+            ('Detect VIN', 'detect-vin', None),
+            ('Check state', 'status', None),
+            ('Flash + Enable SSH (once)', 'flash',
+             'Flash the debug image and enable root SSH?\n\nThis REPROGRAMS the head unit and WIPES its coding '
+             'and Digital Key pairings. Back up the coding first. Do this only once per car.'),
+            ('Enable (repair)', 'enable', None),
+            ('Fix refusing key', 'fix-key',
+             'Re-flash to install our root key? Use this only if SSH opens but login is refused. It re-flashes '
+             '(wipes coding again).'),
+            ('Disable', 'disable', 'Revert persistence and stop debug/SSH on this car?')):
+        if action == 'detect-vin':
+            b = ttk.Button(rb, text=text, command=on_detect_vin)
+        else:
+            b = ttk.Button(rb, text=text, command=lambda a=action, c=confirm: on_root(a, c))
+        b.pack(side='left', padx=4, pady=6)
+        buttons.append(b)
+
+    # ============================ Tab 2: Apps ===================================================
+    t_apps = ttk.Frame(nb)
+    nb.add(t_apps, text='  2. Apps  ')
+    sel = ttk.Frame(t_apps)
     sel.pack(fill='x', **pad)
     chosen = set(cfg.get('apps') or [a for a, _, _, exp in apps if not exp])
     app_vars = {}
     for i, (aid, title, desc, exp) in enumerate(apps):
         v = tk.BooleanVar(value=aid in chosen)
         app_vars[aid] = v
-        label = title + ('  (experimental)' if exp else '')
-        cb = ttk.Checkbutton(sel, text=label, variable=v)
-        cb.grid(row=i // 2, column=i % 2, sticky='w', padx=8, pady=1)
+        ttk.Checkbutton(sel, text=title + ('  (experimental)' if exp else ''), variable=v).grid(
+            row=i // 2, column=i % 2, sticky='w', padx=8, pady=1)
     r = (len(apps) + 1) // 2
-    lang_var = tk.StringVar(value=cfg.get('language', 'en'))
     lf = ttk.Frame(sel)
     lf.grid(row=r, column=0, columnspan=2, sticky='w', **pad)
     ttk.Label(lf, text='Language:').pack(side='left')
     lang_box = ttk.Combobox(lf, state='readonly', width=24,
                             values=['%s - %s' % (l, LANGUAGE_NAMES.get(l, l)) for l in langs])
-    lang_box.current(langs.index(lang_var.get()) if lang_var.get() in langs else 0)
+    lang_box.current(langs.index(cfg.get('language', 'en')) if cfg.get('language', 'en') in langs else 0)
     lang_box.pack(side='left', padx=6)
 
     def set_all(on):
@@ -472,70 +753,24 @@ def run_gui():
     ttk.Checkbutton(sel, text='Reboot the head unit at the end if needed (for the Doom controller gate)',
                     variable=reboot_var).grid(row=r + 1, column=0, columnspan=2, sticky='w', **pad)
 
-    acts = ttk.LabelFrame(root, text='3. Go')
-    acts.pack(fill='x', **pad)
-    buttons = []
-    progress = ttk.Progressbar(root, mode='indeterminate')
-    progress.pack(fill='x', **pad)
-    logbox = scrolledtext.ScrolledText(root, height=16, font=('Consolas' if IS_WIN else 'Courier', 9))
-    logbox.pack(fill='both', expand=True, **pad)
-    ttk.Label(root, text=CREDIT, foreground='#666', wraplength=740).pack(anchor='w', padx=8, pady=(0, 8))
+    ab = ttk.Frame(t_apps)
+    ab.pack(anchor='w', **pad)
 
-    def log(msg):
-        q.put(('log', msg))
-
-    def pump():
-        try:
-            while True:
-                kind, val = q.get_nowait()
-                if kind == 'log':
-                    logbox.insert('end', val + '\n')
-                    logbox.see('end')
-                elif kind == 'done':
-                    busy['on'] = False
-                    progress.stop()
-                    for b in buttons:
-                        b.state(['!disabled'])
-                    ok, msg = val
-                    (messagebox.showinfo if ok else messagebox.showerror)('Bimmhacks', msg)
-        except queue.Empty:
-            pass
-        root.after(100, pump)
-
-    def current():
-        key, ip = key_var.get().strip().strip('"'), ip_var.get().strip()
-        picked = [a for a, v in app_vars.items() if v.get()]
-        lang = langs[lang_box.current()] if lang_box.current() >= 0 else 'en'
-        save_config({'key': key, 'ip': ip, 'apps': picked, 'language': lang, 'reboot': reboot_var.get()})
-        return key, ip, picked, lang
-
-    def start(fn, done_msg):
-        if busy['on']:
-            return
-        busy['on'] = True
-        progress.start(12)
-        for b in buttons:
-            b.state(['disabled'])
-
-        def work():
-            try:
-                node, ssh = preflight(log)
-                fn(node, ssh)
-                q.put(('done', (True, done_msg)))
-            except InstallerError as e:
-                log('ERROR: ' + str(e))
-                q.put(('done', (False, str(e))))
-            except Exception as e:  # keep the window alive, show what happened
-                log('ERROR: %s: %s' % (type(e).__name__, e))
-                q.put(('done', (False, 'Unexpected error: %s' % e)))
-        threading.Thread(target=work, daemon=True).start()
+    def need_ssh():
+        s = find_ssh()
+        if not s:
+            raise InstallerError('The OpenSSH client is missing. Windows: Settings > Apps > Optional features '
+                                 '> add "OpenSSH Client".')
+        return s
 
     def on_test():
-        key, ip, _, _ = current()
-        start(lambda node, ssh: do_simple(ssh, ip, key, 'test', log), 'Connection OK.')
+        _, key, ip, _ = conn_values()
+        start(lambda: do_simple(need_ssh(), ip, key, 'test', log), 'Connection OK.')
 
     def on_install():
-        key, ip, picked, lang = current()
+        _, key, ip, _ = conn_values()
+        picked = [a for a, v in app_vars.items() if v.get()]
+        lang = langs[lang_box.current()] if lang_box.current() >= 0 else 'en'
         if not picked:
             messagebox.showwarning('Bimmhacks', 'Pick at least one app.')
             return
@@ -549,45 +784,119 @@ def run_gui():
                                       % (len(picked), ip)):
             return
         reboot = reboot_var.get()
-        start(lambda node, ssh: do_install(ssh, node, ip, key, picked, lang, reboot=reboot, log=log),
-              'Install finished. The apps appear under Apps on the iDrive.')
+        def w():
+            node, ssh = preflight(log)
+            do_install(ssh, node, ip, key, picked, lang, reboot=reboot, log=log)
+        start(w, 'Install finished. The apps appear under Apps on the iDrive.')
 
     def on_status():
-        key, ip, _, _ = current()
-        start(lambda node, ssh: do_simple(ssh, ip, key, 'status', log), 'Status read - see the log.')
+        _, key, ip, _ = conn_values()
+        start(lambda: do_simple(need_ssh(), ip, key, 'status', log), 'Status read - see the log.')
 
     def on_restore():
-        key, ip, _, _ = current()
+        _, key, ip, _ = conn_values()
         if not messagebox.askyesno('Restore to stock', 'Remove ALL custom apps and put every changed file '
                                    'back exactly as it was before the first install?'):
             return
-        start(lambda node, ssh: do_simple(ssh, ip, key, 'restore', log), 'The car is back to stock.')
+        start(lambda: do_simple(need_ssh(), ip, key, 'restore', log), 'The car is back to stock.')
 
     for text, fn in (('Test connection', on_test), ('Install / Update apps', on_install),
                      ('Status', on_status), ('Restore to stock', on_restore)):
-        b = ttk.Button(acts, text=text, command=fn)
-        b.pack(side='left', padx=8, pady=8)
+        b = ttk.Button(ab, text=text, command=fn)
+        b.pack(side='left', padx=4, pady=8)
         buttons.append(b)
+
+    # ============================ Tab 3: App Store ==============================================
+    t_store = ttk.Frame(nb)
+    nb.add(t_store, text='  3. App Store  ')
+    ttk.Label(t_store, justify='left', text=
+              'Install the on-car MGU App Store, so the client browses, installs and updates apps straight '
+              'from the car screen (Apps > Store) afterwards.\nNeeds internet at the car (USB Ethernet, LTE '
+              'stick, tethered phone or Wi-Fi). Restart the head unit once when it finishes.').pack(anchor='w', **pad)
+    no_renderer_var = tk.BooleanVar(value=cfg.get('no_renderer', False))
+    no_uplink_var = tk.BooleanVar(value=cfg.get('no_uplink', False))
+    ttk.Checkbutton(t_store, text='Leave out the renderer (the Store draws in software)',
+                    variable=no_renderer_var).pack(anchor='w', padx=12)
+    ttk.Checkbutton(t_store, text='Leave out the internet uplink component',
+                    variable=no_uplink_var).pack(anchor='w', padx=12)
+    sb = ttk.Frame(t_store)
+    sb.pack(anchor='w', **pad)
+
+    def on_store():
+        _, key, ip, _ = conn_values()
+        save_config(dict(load_config(), no_renderer=no_renderer_var.get(), no_uplink=no_uplink_var.get()))
+        if not messagebox.askokcancel('Install App Store', 'Install the MGU App Store on the car at %s?\n\n'
+                                      'The car needs internet for this.' % ip):
+            return
+        def w():
+            node, _ = preflight(log)
+            do_store_install(node, ip, key, no_renderer=no_renderer_var.get(),
+                             no_uplink=no_uplink_var.get(), log=log)
+        start(w, 'App Store installed. Restart the head unit to see its tile.')
+    b = ttk.Button(sb, text='Install the App Store', command=on_store)
+    b.pack(side='left', padx=4, pady=8)
+    buttons.append(b)
+
+    # ---- log + progress ------------------------------------------------------------------------
+    progress = ttk.Progressbar(root, mode='indeterminate')
+    progress.pack(fill='x', **pad)
+    logbox = scrolledtext.ScrolledText(root, height=14, font=('Consolas' if IS_WIN else 'Courier', 9))
+    logbox.pack(fill='both', expand=True, **pad)
+    ttk.Label(root, text=CREDIT, foreground='#666', wraplength=800).pack(anchor='w', padx=8, pady=(0, 8))
+
+    def pump():
+        try:
+            while True:
+                kind, val = q.get_nowait()
+                if kind == 'log':
+                    logbox.insert('end', val + '\n')
+                    logbox.see('end')
+                elif kind == 'done':
+                    busy['on'] = False
+                    progress.stop()
+                    for b2 in buttons:
+                        b2.state(['!disabled'])
+                    ok, msg = val
+                    (messagebox.showinfo if ok else messagebox.showerror)('Bimmhacks', msg)
+        except queue.Empty:
+            pass
+        root.after(100, pump)
 
     log('Bimmhacks iDrive 7 App Installer v%s. Apps found: %d. Languages: %s'
         % (VERSION, len(apps), ', '.join(langs)))
+    log('Tabs: 1 root access (once per car) -> 2 apps -> 3 the on-car App Store.')
     root.after(100, pump)
     root.mainloop()
 
 
 # ----------------------------------------------------------------------------- command line
 
+ROOT_ACTIONS = {'root-status': 'status', 'root-flash': 'flash', 'root-enable': 'enable',
+                'root-fix-key': 'fix-key', 'root-disable': 'disable'}
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description='Bimmhacks iDrive 7 App Installer')
-    ap.add_argument('action', nargs='?', default='gui', choices=['gui', 'install', 'test', 'status', 'restore', 'apps'])
+    ap.add_argument('action', nargs='?', default='gui',
+                    choices=['gui', 'install', 'test', 'status', 'restore', 'apps',
+                             'root-status', 'root-flash', 'root-enable', 'root-fix-key', 'root-disable',
+                             'detect-vin', 'store-install'])
     ap.add_argument('apps', nargs='*', help='app ids for install (default: all non-experimental apps)')
-    ap.add_argument('--key', help='root SSH private key (id_rsa from the idrive7-8-ssh-root tool)')
+    ap.add_argument('--key', help='root SSH private key (id_rsa from the root-access step)')
     ap.add_argument('--ip', help='head unit address (default: from connect.txt next to the key, else %s)' % DEFAULT_IP)
+    ap.add_argument('--vin', help='17-char VIN (required for root-flash / root-fix-key)')
+    ap.add_argument('--arch', default='id7', choices=ARCHES, help='head-unit variant (default: id7)')
+    ap.add_argument('--gateway', default='auto', help="ENET gateway address, or 'auto' (default)")
     ap.add_argument('--language', default='en')
     ap.add_argument('--no-reboot', action='store_true', help='do not reboot the unit at the end (controller gate loads at the next start)')
     ap.add_argument('--no-controller-gate', action='store_true', help='do not install the controller gate (Doom)')
+    ap.add_argument('--no-renderer', action='store_true', help='store-install: leave out the renderer')
+    ap.add_argument('--no-uplink', action='store_true', help='store-install: leave out the internet uplink')
     ap.add_argument('--keep-build', action='store_true', help="keep oap-sdk/ and dist/ after installing (contain BMW's SDK)")
     a = ap.parse_args(argv)
+
+    def log(m):
+        print(m, flush=True)
 
     if a.action == 'gui':
         try:
@@ -601,14 +910,28 @@ def main(argv=None):
             print('%-18s %-22s %s' % (aid, title, '(experimental: %s)' % exp if exp else ''))
         print('languages: ' + ', '.join(list_languages()))
         return
-    if not a.key:
-        ap.error('--key is needed')
-    ip = a.ip or ip_from_key(a.key) or DEFAULT_IP
 
-    def log(m):
-        print(m, flush=True)
     try:
+        # root-access actions and detect-vin don't need Node or an existing key
+        if a.action in ROOT_ACTIONS:
+            do_root(ROOT_ACTIONS[a.action], log, vin=a.vin, ip=a.ip, gateway=a.gateway, arch=a.arch)
+            return
+        if a.action == 'detect-vin':
+            vin = detect_vin(log, ip=a.ip, gateway=a.gateway, arch=a.arch)
+            print('VIN: ' + vin if vin else 'VIN not detected (is the ENET cable in and the car awake?)')
+            return
+
         node, ssh = preflight(log)
+        if a.action == 'store-install':
+            if not a.key:
+                ap.error('--key is needed')
+            do_store_install(node, a.ip or ip_from_key(a.key) or DEFAULT_IP, a.key,
+                             no_renderer=a.no_renderer, no_uplink=a.no_uplink, log=log)
+            return
+
+        if not a.key:
+            ap.error('--key is needed')
+        ip = a.ip or ip_from_key(a.key) or DEFAULT_IP
         if a.action == 'install':
             known = [x[0] for x in list_apps()]
             apps = a.apps or [x for x in known if x not in EXPERIMENTAL]
