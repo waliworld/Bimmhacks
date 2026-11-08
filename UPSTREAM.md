@@ -61,6 +61,9 @@ This project bundles three upstream repositories, each copied unchanged except w
   runs a multi-map tune. It reuses, with attribution, M Vitals' engine-unit identifier lists
   (`config.dme`) and Engine Config's two map-switch commands (captured by a1-mapping, PR #23 of
   idrive7-apps). Tests: `idrive7-apps/kit/tools/test_bimmhacks_tuner.js`. It does not flash.
+- `installer/tests/` holds a fake ENET gateway (`fake_enet.py`) and tests that drive the real coding-snapshot,
+  VIN-detection and root-tool `status` code against it, and the installer's safety guards (a refused flash
+  must send the car nothing).
 - `installer/bimmhacks_installer.py` is the window + CLI that drives all of the above. The flashing
   app, installer and Bimmhacks apps were developed by **Mr. Wali**.
 

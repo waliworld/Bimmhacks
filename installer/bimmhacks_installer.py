@@ -31,7 +31,7 @@ it. Stage C (App Store) needs internet at the car (or a prepared USB stick).
 """
 import argparse, io, json, os, queue, re, shutil, stat, subprocess, sys, tarfile, tempfile, threading
 
-VERSION = '1.4.0'
+VERSION = '1.5.0'
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 ROOT = os.environ.get('BIMMHACKS_APPS_ROOT') or os.path.join(REPO, 'idrive7-apps')
@@ -434,14 +434,30 @@ def run_ssh_root(action, log, vin=None, ip=None, gateway='auto', arch='id7', per
         if 'DeprecationWarning' in line or 'utcnow()' in line:
             continue
         log('  root> ' + line)
+    p.stdout.close()
     return p.wait()
 
 
-def do_root(action, log, vin=None, ip=None, gateway='auto', arch='id7'):
+FLASHING_ACTIONS = ('flash', 'fix-key')
+
+
+def require_backup_confirmation(action, confirmed):
+    """Flashing reprograms the head unit (it wipes the coding and the Digital Key pairings). The window asks
+    for a backup confirmation before it enables the button; the command line must say the same thing
+    explicitly, and this runs BEFORE anything is sent to the car."""
+    if action in FLASHING_ACTIONS and not confirmed:
+        raise InstallerError(
+            'Refusing to flash: this reprograms the head unit and WIPES its coding and BMW Digital Key pairings.\n'
+            'First save the coding (run "backup-coding", and take a BimmerCode / E-Sys backup), then repeat the '
+            'command with --confirm-backup to say you have done it.')
+
+
+def do_root(action, log, vin=None, ip=None, gateway='auto', arch='id7', backup_confirmed=False):
     """Root-access actions. Returns the path of the SSH key when one was written, else None."""
     if IS_WIN:
         log('Note: on Windows, run this installer as Administrator so the ENET link-local address is used.')
-    flashing = action in ('flash', 'fix-key')
+    require_backup_confirmation(action, backup_confirmed)
+    flashing = action in FLASHING_ACTIONS
     if flashing and not (vin and re.match(r'^[A-HJ-NPR-Z0-9]{17}$', vin.upper())):
         raise InstallerError('A valid 17-character VIN is needed to flash. Use "Detect VIN", or type it in.')
     if flashing:
@@ -473,11 +489,22 @@ def detect_vin(log, ip=None, gateway='auto', arch='id7'):
     def grab(m):
         lines.append(m)
         log(m)
-    code = run_ssh_root('status', grab, ip=ip, gateway=gateway, arch=arch)
+    run_ssh_root('status', grab, ip=ip, gateway=gateway, arch=arch)
+    return vin_from_output(lines)
+
+
+# The root tool reports the VIN the car sends in its discovery reply as "... | VIN: <17 chars>" (or
+# "VIN: not reported"). Only that marker counts: any other 17-character token in the output (a log
+# file name, a hash, a certificate id) is not a VIN, and this value ends up in the field that a flash
+# writes into the head unit.
+_VIN_LINE = re.compile(r'\bVIN:\s*([A-HJ-NPR-Z0-9]{17})(?![A-Za-z0-9])')
+
+
+def vin_from_output(lines):
     for m in lines:
-        v = re.search(r'\b([A-HJ-NPR-Z0-9]{17})\b', m)
-        if v:
-            return v.group(1)
+        found = _VIN_LINE.search(m)
+        if found:
+            return found.group(1)
     return None
 
 
@@ -929,7 +956,8 @@ def run_gui():
         if confirm and not messagebox.askyesno('Root access', confirm):
             return
         def w():
-            key = do_root(action, log, vin=vin or None, ip=ip or None, arch=arch)
+            key = do_root(action, log, vin=vin or None, ip=ip or None, arch=arch,
+                          backup_confirmed=backup_done.get())
             if key:
                 key_var.set(key)
                 got = ip_from_key(key)
@@ -1336,6 +1364,8 @@ def main(argv=None):
     ap.add_argument('--gateway', default='auto', help="ENET gateway address, or 'auto' (default)")
     ap.add_argument('--language', default='en')
     ap.add_argument('--out', help='backup-coding: folder to write the coding snapshot into')
+    ap.add_argument('--confirm-backup', action='store_true',
+                    help='root-flash / root-fix-key: I have saved the coding (BimmerCode / E-Sys) and accept that a flash wipes it')
     ap.add_argument('--repo', help='install-our-apps / usb-repo: a GitHub owner/repo source')
     ap.add_argument('--stage', help='install-*-apps: also stage the apps to this folder / USB for offline install')
     ap.add_argument('--no-reboot', action='store_true', help='do not reboot the unit at the end (controller gate loads at the next start)')
@@ -1364,7 +1394,8 @@ def main(argv=None):
     try:
         # root-access actions and detect-vin don't need Node or an existing key
         if a.action in ROOT_ACTIONS:
-            do_root(ROOT_ACTIONS[a.action], log, vin=a.vin, ip=a.ip, gateway=a.gateway, arch=a.arch)
+            do_root(ROOT_ACTIONS[a.action], log, vin=a.vin, ip=a.ip, gateway=a.gateway, arch=a.arch,
+                    backup_confirmed=a.confirm_backup)
             return
         if a.action == 'detect-vin':
             vin = detect_vin(log, ip=a.ip, gateway=a.gateway, arch=a.arch)

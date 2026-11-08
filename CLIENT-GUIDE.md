@@ -109,13 +109,20 @@ Our own tuner companion, in the **Apps** tab (unticked by default; it asks for c
 
 - **Gauges** — engine speed, boost, load, ignition timing, coolant, oil, intake air and torque, with
   session peaks and the last minute of boost.
+- **PIDs** — every value that is switched on, live, with whether your car answers it. *More PIDs* pages
+  through them.
 - **Datalog** — *Start log* / *Stop log* records the drive to a CSV on the head unit (newest 20 are
-  kept). It will not log the demo drive: with no live car data it says so.
+  kept). It will not log the demo drive: with no live car data it says so. In **Settings → Log pack**
+  switch on what your car has: **Tuning** (lambda, knock, ignition, trims, rail pressure …, on by
+  default), **Engine**, **Cylinders**, **MHD capture** (eight identifiers logged as raw hex) and
+  **Custom** (your own `custom_pids.json`; see the app's README for the format). The Datalog page shows
+  how many values of each pack your car is actually answering.
 - **Faults** — the engine unit's fault codes. *Clear* needs two presses.
 - **Maps** — map 1–4 and Max Cooling **for a car that already runs an MHD multi-map tune**. It ships
   **off** (*Settings → Map switching*); off means nothing is ever sent.
 
-**It never flashes or writes a tune.** It is new and has not been tested on a real car yet — tell the
+**It never flashes or writes a tune.** Flashing the head unit (root access) is a separate, deliberate step that
+needs a coding backup first. The tuner is new and has not been tested on a real car yet — tell the
 developer what your car does. Values the car does not answer show as `--` (and blank in the log).
 
 ### Tab — Bimmhacks Apps
@@ -138,7 +145,7 @@ Without a window (any OS):
 # root access (ENET cable; once per car)
 python3 installer/bimmhacks_installer.py root-status                 # read-only check
 python3 installer/bimmhacks_installer.py backup-coding --out coding-backups   # coding snapshot
-python3 installer/bimmhacks_installer.py root-flash --vin <17-CHAR-VIN>   # flash + enable SSH
+python3 installer/bimmhacks_installer.py root-flash --vin <17-CHAR-VIN> --confirm-backup   # flash + enable SSH
 python3 installer/bimmhacks_installer.py root-enable                 # repair, no flashing
 
 # apps

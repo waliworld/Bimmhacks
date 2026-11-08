@@ -3,8 +3,10 @@
  * logger.js - writes a drive as a CSV file on the head unit, one row per sample.
  *
  *   const log = new DataLogger({ dir, columns: CHANNELS });
- *   log.start();                       // -> { name, path }   tuner-20261108-120000.csv
- *   log.add(values, tMs);              // values = { rpm: 3000, boost: 0.4, ... } (null = blank cell)
+ *   log.start(columns);                // -> { name, path }   tuner-20261108-120000.csv; columns (optional) = the
+ *                                      //    channels this log records ({ key, col }), fixed for the file
+ *   log.add(values, tMs);              // values = { rpm: 3000, boost: 0.4, mhd3010: '00A1FF' ... }:
+ *                                      //    a number, the hex text of a raw channel, or null / missing = blank cell
  *   const sum = log.stop();            // -> { name, path, rows, seconds, peaks, reason }
  *   log.list();                        // newest first: [{ name, size, mtime }]
  *
@@ -16,6 +18,7 @@ const nodeFs = require('fs');
 const nodePath = require('path');
 
 const FLUSH_ROWS = 10;
+const HEX = /^[0-9A-F]{0,64}$/;
 const NAME = /^tuner-\d{8}-\d{6}(_[b-z])?\.csv$/;     // _b.._z: more starts inside one second (sorts after the plain name)
 
 const pad = (n) => String(n).padStart(2, '0');
@@ -44,8 +47,11 @@ class DataLogger {
     get name() { return this.file; }
     get elapsedMs() { return this.running ? this.lastT : 0; }
 
-    start() {
+    start(columns) {
         if (this.running) return { name: this.file, path: this.path };
+        if (columns) this.columns = columns;
+        // the header is written as it is: only plain names may be columns
+        this.columns.forEach((c) => { if (!/^[A-Za-z0-9_]+$/.test(c.col)) throw new Error('bad column name: ' + c.col); });
         try { this.fs.mkdirSync(this.dir, { recursive: true }); } catch (e) { /* exists, or no permission: write tells */ }
         const name = this._nextName('tuner-' + stamp(this.now()));
         const header = 'time_s,' + this.columns.map((c) => c.col).join(',') + '\n';
@@ -84,6 +90,7 @@ class DataLogger {
         this.lastT = t * 1000;
         const cells = this.columns.map((c) => {
             const v = values ? values[c.key] : null;
+            if (typeof v === 'string') return HEX.test(v) ? v : '';      // a raw channel: its bytes as hex text
             if (typeof v !== 'number' || !isFinite(v)) return '';
             const p = this.peaks[c.key] || (this.peaks[c.key] = { min: v, max: v });
             if (v < p.min) p.min = v;

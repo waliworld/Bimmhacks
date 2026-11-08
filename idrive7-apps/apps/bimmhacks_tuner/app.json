@@ -1,7 +1,7 @@
 {
   "id": "bimmhacks_tuner",
   "title": "Bimmhacks Tuner",
-  "description": "Live gauges (boost, load, timing, temperatures), a CSV datalogger, the engine unit's fault codes and, for a car that already runs a multi-map tune, map switching. Reads by default; never flashes or writes a tune",
+  "description": "Live gauges, a CSV datalogger with tuning, engine, per-cylinder, MHD-capture and your own custom PIDs, the engine unit's fault codes and, for a car that already runs a multi-map tune, map switching. Reads by default; never flashes or writes a tune",
   "version": "1.0.0",
   "vendor": "bimmhacks",
   "loggingId": "OABT",
@@ -71,6 +71,36 @@
     {
       "key": "dmeReads",
       "label": "Read engine unit values (boost, load, timing)",
+      "type": "bool",
+      "default": true
+    },
+    {
+      "key": "packTuning",
+      "label": "Log pack: Tuning (lambda, knock, ignition, trims ...)",
+      "type": "bool",
+      "default": true
+    },
+    {
+      "key": "packEngine",
+      "label": "Log pack: Engine (VANOS, oil pressure, exhaust ...)",
+      "type": "bool",
+      "default": false
+    },
+    {
+      "key": "packCylinders",
+      "label": "Log pack: Cylinders (ignition, rough running, misfires)",
+      "type": "bool",
+      "default": false
+    },
+    {
+      "key": "packMhd",
+      "label": "Log pack: MHD capture (8 identifiers, raw hex)",
+      "type": "bool",
+      "default": false
+    },
+    {
+      "key": "packCustom",
+      "label": "Log pack: Custom (custom_pids.json)",
       "type": "bool",
       "default": true
     },

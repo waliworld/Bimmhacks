@@ -21,6 +21,8 @@ SKIP_DIRS = {'.git', '.github', '__pycache__', 'node_modules', 'oap-sdk', 'dist'
              'work', 'captures', '.font-cache', 'build', 'coding-backups'}
 SKIP_PATHS = {'idrive7-apps/docs/media', 'idrive7-apps/docs/screens', 'idrive7-apps/kit/renderd/test',
               'idrive7-apps/kit/renderd/build',
+              # tests and their fake car are for developers, not clients
+              'installer/tests',
               # the SSH-root tool keeps the shared flash assets (data/assets, needed) but never
               # client-specific keys or logs
               'tools/idrive7-8-ssh-root/data/enrollments', 'tools/idrive7-8-ssh-root/data/logs'}

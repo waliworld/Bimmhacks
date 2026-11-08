@@ -21,8 +21,9 @@ installer developed by Mr. Wali**; the apps, root tool and Store are open source
   **Bimmhacks Hello**, ships in the Apps tab; copy it to build your own. Full walkthrough:
   [docs/MAKE-YOUR-OWN-APP.md](docs/MAKE-YOUR-OWN-APP.md).
 - **Bimmhacks Tuner** (in the Apps tab, marked experimental) — our own app: live gauges (boost, load,
-  timing, temperatures), a CSV datalogger, the engine unit's fault codes and, for a car that *already*
-  runs a multi-map tune, map switching. **It never flashes or writes a tune**, and map switching ships
+  timing, lambda, knock), a CSV datalogger with switchable **log packs** (tuning, engine, per-cylinder, the
+  eight MHD-capture identifiers logged raw, and your own `custom_pids.json`), the engine unit's fault codes
+  and, for a car that *already* runs a multi-map tune, map switching. **It never flashes or writes a tune**, and map switching ships
   off. Not yet tested on a car. Details: [idrive7-apps/apps/bimmhacks_tuner/README.md](idrive7-apps/apps/bimmhacks_tuner/README.md).
 - **Credits** — the people behind every part.
 
@@ -67,7 +68,7 @@ and checks the zip carries no BMW SDK, built apps or client SSH keys. Send the z
 
 ```sh
 python3 installer/bimmhacks_installer.py backup-coding --out coding-backups   # coding snapshot
-python3 installer/bimmhacks_installer.py root-flash --vin <VIN>     # enable root SSH (ENET)
+python3 installer/bimmhacks_installer.py root-flash --vin <VIN> --confirm-backup   # enable root SSH (ENET); refuses without the flag
 python3 installer/bimmhacks_installer.py install --key <id_rsa>     # build + install apps
 python3 installer/bimmhacks_installer.py store-install --key <id_rsa>   # install the App Store
 python3 installer/bimmhacks_installer.py install-idrive-apps --key <id_rsa>   # cluster/HUD maps

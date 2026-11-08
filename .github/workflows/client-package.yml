@@ -18,7 +18,14 @@ jobs:
         with:
           node-version: '20'
       - name: Bimmhacks Tuner tests
-        run: node idrive7-apps/kit/tools/test_bimmhacks_tuner.js
+        run: |
+          node idrive7-apps/kit/tools/test_bimmhacks_tuner.js
+          node idrive7-apps/kit/tools/test_bimmhacks_pids.js
+      - name: "Installer tests (fake car - coding snapshot, VIN, flash guards)"
+        run: |
+          python -m pip install cryptography
+          python installer/tests/test_coding_backup.py
+          python installer/tests/test_guards.py
       - name: Installer self-check
         run: |
           python installer/bimmhacks_installer.py apps
