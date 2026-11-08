@@ -28,6 +28,7 @@ jobs:
           python installer/tests/test_guards.py
           python installer/tests/test_root_enable.py
           python installer/tests/test_pid_capture.py
+          python installer/tests/test_pocket.py
       - name: Installer self-check
         run: |
           python installer/bimmhacks_installer.py apps

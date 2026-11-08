@@ -141,6 +141,21 @@ Bimmhacks Tuner that logs the same identifiers raw. The root tool's own session 
 reads the capture only; nothing is sent to the car. (Same thing without a window:
 `python3 installer/pid_capture.py drive.pcapng`.)
 
+## Phone instead of a laptop: Bimmhacks Pocket
+
+If you were given a **Pocket box** (a small computer with an ENET cable), you need no laptop at all:
+
+1. Plug the cable into the car's OBD port, power the box from the car's USB port, ignition on.
+2. On your phone, join the Wi-Fi named on the box (e.g. **Bimmhacks-Pocket**) and open
+   **http://10.42.0.1:8080/** (Safari: *Share → Add to Home Screen* keeps it as an icon).
+3. The page has the same three steps: **Root access** (with the same backup confirmation before a
+   flash), **App Store**, and optionally the apps. The activity log at the bottom shows what the box
+   is doing; it keeps working if the phone's screen goes off.
+4. When root access finishes, press **Download key bundle** to keep a copy of the car's SSH key on the
+   phone; coding snapshots can be downloaded from their list.
+
+Building such a box from a Raspberry Pi is described in `docs/POCKET.md`.
+
 ## macOS / Linux
 
 Install Python 3 and Node.js (macOS: `brew install python node python-tk`; Ubuntu:

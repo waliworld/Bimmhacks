@@ -11,6 +11,8 @@ id_rsa.*
 .bimmhacks-installer.json
 # coding snapshots contain a car's VIN: keep them local
 coding-backups/
+# the Store package a Pocket box downloads for itself (installer/pocket_server.py)
+pocket-store/
 __pycache__/
 *.pyc
 .DS_Store

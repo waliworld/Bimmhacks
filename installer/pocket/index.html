@@ -1,0 +1,329 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#ffffff">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Bimmhacks">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/icon.svg">
+<title>Bimmhacks Pocket</title>
+<style>
+  :root {
+    --bg: #f3f4f6; --panel: #ffffff; --line: #e2e5ea; --ink: #1b1f27; --muted: #6b7280;
+    --accent: #1c5fd6; --accent-dk: #154aa8; --accent-soft: #e9f0fd;
+    --danger: #b42318; --danger-soft: #fdecea; --danger-line: #f2c4bd;
+    --good: #1f7a4d; --good-soft: #e6f4ec; --warn: #8a4b00; --warn-soft: #fff4e5; --chip: #eef0f3;
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.4 -apple-system, system-ui, "Segoe UI", Roboto, sans-serif;
+         padding-bottom: calc(24px + env(safe-area-inset-bottom)); }
+  header { position: sticky; top: 0; z-index: 5; background: var(--panel); border-bottom: 1px solid var(--line);
+           padding: calc(10px + env(safe-area-inset-top)) 16px 10px; display: flex; align-items: center; gap: 10px; }
+  .mark { width: 10px; height: 10px; background: var(--accent); flex: none; }
+  .brand { font-weight: 700; font-size: 17px; }
+  .brand small { font-weight: 500; color: var(--muted); margin-left: 6px; font-size: 13px; }
+  .chip { margin-left: auto; font-size: 12px; padding: 4px 10px; border-radius: 999px; background: var(--chip); color: var(--muted); white-space: nowrap; }
+  .chip.good { background: var(--good-soft); color: var(--good); }
+  .chip.warn { background: var(--warn-soft); color: var(--warn); }
+  #bar { position: fixed; left: 0; right: 0; height: 3px; background: var(--line); display: none; z-index: 6;
+         top: calc(50px + env(safe-area-inset-top)); overflow: hidden; }
+  #bar i { position: absolute; left: -40%; width: 40%; height: 100%; background: var(--accent); animation: slide 1.1s linear infinite; }
+  @keyframes slide { to { left: 100%; } }
+  main { padding: 12px 16px; max-width: 560px; margin: 0 auto; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px 16px; margin-bottom: 12px; }
+  .kicker { font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+  h2 { margin: 2px 0 4px; font-size: 17px; }
+  p { margin: 4px 0 8px; color: var(--muted); font-size: 14px; }
+  label.f { display: block; font-size: 13px; color: var(--muted); margin: 8px 0 4px; }
+  input, select { width: 100%; font: inherit; font-size: 16px; min-height: 44px; padding: 8px 12px; color: var(--ink); background: var(--panel);
+                  border: 1px solid var(--line); border-radius: 8px; outline: none; -webkit-appearance: none; appearance: none; }
+  input:focus, select:focus { border-color: var(--accent); }
+  input.vin { text-transform: uppercase; letter-spacing: .06em; font-family: ui-monospace, Menlo, Consolas, monospace; }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .btns { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }
+  .btns .wide { grid-column: 1 / -1; }
+  button { font: inherit; font-size: 15px; min-height: 44px; padding: 8px 12px; border-radius: 9px; border: 1px solid var(--line);
+           background: var(--panel); color: var(--ink); cursor: pointer; -webkit-tap-highlight-color: transparent; }
+  button:active { background: #f1f3f6; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 700; }
+  button.primary:active { background: var(--accent-dk); }
+  button.danger { background: var(--danger-soft); border-color: var(--danger-line); color: var(--danger); font-weight: 700; }
+  button:disabled { opacity: .45; cursor: default; }
+  .notice { background: var(--warn-soft); color: var(--warn); border-radius: 8px; padding: 10px 12px; font-size: 14px; margin: 8px 0; }
+  .check { display: flex; align-items: flex-start; gap: 10px; margin: 10px 0 2px; font-size: 15px; }
+  .check input { width: 22px; height: 22px; min-height: 0; padding: 0; margin: 1px 0 0; -webkit-appearance: checkbox; appearance: checkbox; flex: none; }
+  details { margin-top: 10px; }
+  summary { color: var(--accent); font-size: 14px; cursor: pointer; padding: 6px 0; list-style: none; }
+  summary::-webkit-details-marker { display: none; }
+  summary::before { content: "+ "; }
+  details[open] summary::before { content: "− "; }
+  .line { font-size: 14px; margin: 6px 0; }
+  .line a { color: var(--accent); text-decoration: none; font-weight: 600; }
+  .mono { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 13px; word-break: break-all; }
+  #log { font: 12px/1.45 ui-monospace, Menlo, Consolas, monospace; white-space: pre-wrap; word-break: break-word; max-height: 42vh;
+         overflow: auto; margin: 6px 0 0; padding: 8px 0 0; border-top: 1px solid var(--line); min-height: 120px; }
+  #log .err { color: var(--danger); } #log .ok { color: var(--good); }
+  .acthead { display: flex; align-items: center; }
+  .acthead button { margin-left: auto; min-height: 36px; padding: 4px 12px; font-size: 14px; }
+  .busy { font-size: 13px; color: var(--accent); margin-left: 10px; }
+  #toast { position: fixed; left: 16px; right: 16px; bottom: calc(16px + env(safe-area-inset-bottom)); background: var(--ink); color: #fff;
+           padding: 12px 14px; border-radius: 10px; font-size: 14px; z-index: 9; transform: translateY(120%); opacity: 0; visibility: hidden;
+           transition: transform .25s, opacity .25s, visibility .25s; }
+  #toast.show { transform: none; opacity: 1; visibility: visible; }
+  #toast.ok { background: var(--good); } #toast.err { background: var(--danger); }
+  footer { color: var(--muted); font-size: 12px; text-align: center; padding: 8px 16px 0; }
+  ul.snaps { list-style: none; padding: 0; margin: 4px 0 0; }
+  ul.snaps li { font-size: 13px; padding: 4px 0; border-top: 1px solid var(--line); }
+  ul.snaps a { color: var(--accent); text-decoration: none; }
+</style>
+</head>
+<body>
+<header>
+  <div class="mark"></div>
+  <div class="brand">Bimmhacks<small>Pocket</small></div>
+  <div class="chip" id="chip">Connecting …</div>
+</header>
+<div id="bar"><i></i></div>
+
+<main>
+  <section class="card">
+    <div class="kicker">Car</div>
+    <label class="f" for="vin">VIN</label>
+    <input id="vin" class="vin" maxlength="17" autocapitalize="characters" autocomplete="off" spellcheck="false" placeholder="17 characters, or press Detect VIN">
+    <div class="two">
+      <div><label class="f" for="arch">Head unit</label><select id="arch"></select></div>
+      <div><label class="f" for="ip">IP address</label><input id="ip" inputmode="decimal" autocomplete="off" placeholder="169.254.36.47"></div>
+    </div>
+    <div class="line" id="keyline">No SSH key on the box yet - the root-access step writes it.</div>
+    <details>
+      <summary>Advanced</summary>
+      <label class="f" for="gateway">ENET gateway (auto = find it by broadcast)</label>
+      <input id="gateway" autocomplete="off" placeholder="auto">
+      <label class="f" for="key">SSH key file on the box (filled in by root access)</label>
+      <input id="key" class="mono" autocomplete="off" placeholder="/…/data/enrollments/<VIN>/id_rsa">
+      <label class="f" for="language">App language</label>
+      <select id="language"></select>
+      <label class="check"><input type="checkbox" id="root_ip_override"> Root access: use the IP address above instead of the address the car reports (only with a bridge or NAT between box and car)</label>
+    </details>
+  </section>
+
+  <section class="card">
+    <div class="kicker">Step 1 · once per car</div>
+    <h2>Root access over ENET</h2>
+    <p>Box on the ENET cable, ignition on, a charger on the battery. Already rooted? Skip to step 2.</p>
+    <div class="btns">
+      <button data-run="detect-vin">Detect VIN</button>
+      <button data-run="backup-coding">Back up coding</button>
+      <button data-run="root-status" class="wide">Check state (read-only)</button>
+    </div>
+    <div class="notice">Flashing reprograms the head unit and <b>wipes its coding and BMW Digital Key pairings</b>. Take a coding snapshot above <i>and</i> a BimmerCode / E-Sys backup first; re-pair keys after.</div>
+    <label class="check"><input type="checkbox" id="backup"> I have saved a restorable coding backup (BimmerCode / E-Sys)</label>
+    <div class="btns">
+      <button id="flash" class="primary wide" disabled data-run="root-flash">Flash + enable SSH</button>
+    </div>
+    <details>
+      <summary>Repair and other actions</summary>
+      <div class="btns">
+        <button data-run="root-enable">Enable (repair, no flash)</button>
+        <button data-run="root-fix-key" id="fixkey" disabled>Fix refusing key</button>
+        <button data-run="root-disable" class="danger wide">Disable root SSH</button>
+      </div>
+    </details>
+  </section>
+
+  <section class="card">
+    <div class="kicker">Step 2 · on-car store</div>
+    <h2>Install the MGU App Store</h2>
+    <p>Then the car browses, installs and updates apps itself (Apps › Store). The <b>car</b> needs internet: USB Ethernet, an LTE stick, a tethered phone or Wi-Fi.</p>
+    <div class="btns">
+      <button data-run="test">Test connection</button>
+      <button data-run="store-install" class="primary">Install the App Store</button>
+    </div>
+    <div class="line" id="storeline">Store package on the box: checking …</div>
+    <details>
+      <summary>Store options</summary>
+      <label class="check"><input type="checkbox" id="no_renderer"> Leave out the renderer (the Store draws in software)</label>
+      <label class="check"><input type="checkbox" id="no_uplink"> Leave out the internet uplink component</label>
+      <div class="btns"><button data-run="stage-store" class="wide">Download the Store package to the box (box online)</button></div>
+    </details>
+  </section>
+
+  <section class="card">
+    <div class="kicker">Step 3 · optional</div>
+    <h2>Apps from this box</h2>
+    <p>Installs the recommended set of MGU custom apps straight from the box (it builds them with the SDK read from your own car - slow on a small box). The Store above does the same from the car screen.</p>
+    <div class="btns">
+      <button data-run="install-apps" class="primary">Install recommended apps</button>
+      <button data-run="status">Status</button>
+      <button data-run="restore" class="danger wide">Restore to stock</button>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="kicker">Coding snapshots on the box</div>
+    <ul class="snaps" id="snaps"><li>None yet.</li></ul>
+  </section>
+
+  <section class="card">
+    <div class="acthead"><div class="kicker">Activity</div><span class="busy" id="busy"></span><button id="clear">Clear</button></div>
+    <div id="log"></div>
+  </section>
+
+  <footer id="foot">Bimmhacks by Mr. Wali · apps by cauliflowermossgrape (MIT) · root tool public domain · Store by Robert Nisipeanu &amp; IterioDev (GPL-3.0)</footer>
+</main>
+<div id="toast"></div>
+
+<script>
+(function () {
+  'use strict';
+  var $ = function (s) { return document.querySelector(s); };
+  var cursor = 0, lastAt = 0, state = null, polling = false;
+  var pin = '';
+  try { pin = localStorage.getItem('pocket_pin') || ''; } catch (e) {}
+
+  var CONFIRM = {
+    'root-flash': 'Flash the head unit and enable root SSH?\n\nThis reprograms the unit and WIPES its coding and BMW Digital Key pairings. It reboots and takes a few minutes. Keep the car awake and the box plugged in.',
+    'root-fix-key': 'Re-flash to install our root key?\n\nSame as a flash: coding and Digital Key pairings are wiped. Only for a unit whose SSH opens but refuses the login.',
+    'root-disable': 'Disable root SSH on the car again?',
+    'store-install': 'Install the MGU App Store on the car?\n\nAfterwards the car needs internet to browse the Store.',
+    'stage-store': 'Download the Store package (and Doom\'s game data) onto this box now?\n\nThe box needs internet for this - join it to a Wi-Fi with internet or plug its Ethernet into your router first.',
+    'install-apps': 'Install the recommended apps on the car from this box?\n\nEverything changed is backed up first; the head unit may reboot at the end.',
+    'restore': 'Remove ALL custom apps and put every changed file back to stock?'
+  };
+  var NEEDS_BACKUP = { 'root-flash': true, 'root-fix-key': true };
+
+  function api(path, opts) {
+    opts = opts || {};
+    opts.headers = Object.assign({ 'X-Pocket-Pin': pin }, opts.headers || {});
+    if (opts.body && typeof opts.body !== 'string') { opts.body = JSON.stringify(opts.body); opts.headers['Content-Type'] = 'application/json'; }
+    return fetch(path, opts).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (j) {
+        if (r.status === 401 && j.pin) {
+          var p = prompt('This box asks for a PIN:');
+          if (p === null) { return { ok: false, status: 401, error: 'PIN needed.' }; }
+          pin = p.trim(); try { localStorage.setItem('pocket_pin', pin); } catch (e) {}
+          return api(path, opts);
+        }
+        j.ok = r.ok; j.status = r.status; return j;
+      });
+    }, function () { return { ok: false, status: 0, error: 'The box is not answering. Still on its Wi-Fi?' }; });
+  }
+
+  var toastTimer;
+  function toast(msg, kind) {
+    var t = $('#toast'); t.textContent = msg; t.className = 'show ' + (kind || '');
+    clearTimeout(toastTimer); toastTimer = setTimeout(function () { t.className = ''; }, kind === 'err' ? 9000 : 5000);
+  }
+
+  function fill(sel, values, current) {
+    var el = $(sel); if (el.options.length) { el.value = current; return; }
+    values.forEach(function (v) { var o = document.createElement('option'); o.value = v; o.textContent = v; el.appendChild(o); });
+    el.value = current;
+  }
+
+  function render(s) {
+    state = s;
+    var chip = $('#chip'); chip.textContent = s.chip[0]; chip.className = 'chip ' + s.chip[1];
+    $('#bar').style.display = s.busy ? 'block' : 'none';
+    $('#busy').textContent = s.busy ? ('Running: ' + s.busy + (s.since ? ' · ' + Math.round(s.since) + 's' : '')) : '';
+    document.querySelectorAll('[data-run]').forEach(function (b) {
+      var gated = NEEDS_BACKUP[b.dataset.run] && !$('#backup').checked;
+      b.disabled = !!s.busy || gated;
+    });
+    var c = s.car;
+    ['vin', 'ip', 'gateway', 'key'].forEach(function (f) {
+      var el = $('#' + f); if (document.activeElement !== el) { el.value = c[f] === 'auto' && f === 'gateway' ? '' : (c[f] || ''); }
+    });
+    fill('#arch', s.arches, c.arch);
+    fill('#language', s.languages, c.language);
+    $('#root_ip_override').checked = !!c.root_ip_override;
+    var k = $('#keyline');
+    if (c.key_ok) {
+      k.innerHTML = 'SSH key saved on the box for this car · <a href="/api/download?key=1&pin=' + encodeURIComponent(pin) + '">Download key bundle</a>';
+    } else if (c.key) {
+      k.textContent = 'The key file set above does not exist on the box: ' + c.key;
+    } else {
+      k.textContent = 'No SSH key on the box yet - the root-access step writes it.';
+    }
+    $('#storeline').textContent = s.box.store_staged
+      ? 'Store package on the box: ready (installs without internet on the box).'
+      : 'Store package on the box: not downloaded yet - the install fetches it from GitHub, so the box needs internet then (or use the button under Store options while online).';
+    var snaps = $('#snaps');
+    if (s.snapshots.length) {
+      snaps.innerHTML = s.snapshots.slice().reverse().map(function (n) {
+        return '<li><a href="/api/download?snapshot=' + encodeURIComponent(n) + '&pin=' + encodeURIComponent(pin) + '">' + n + '</a></li>';
+      }).join('');
+    } else { snaps.innerHTML = '<li>None yet.</li>'; }
+    var box = s.box, bits = [];
+    if (box.enet.length) { bits.push('ENET link ' + box.enet.join(', ')); } else { bits.push('no ENET link-local address yet'); }
+    if (!box.ssh) { bits.push('no ssh on the box'); }
+    if (!box.node) { bits.push('no Node.js on the box'); }
+    $('#foot').textContent = 'Box ' + box.host + ' · ' + bits.join(' · ') + ' · v' + s.version;
+    if (s.last && s.last.at !== lastAt) {
+      lastAt = s.last.at;
+      toast(s.last.message, s.last.ok ? 'ok' : 'err');
+    }
+  }
+
+  function appendLog(lines) {
+    if (!lines.length) { return; }
+    var log = $('#log'), atEnd = log.scrollTop + log.clientHeight >= log.scrollHeight - 24;
+    lines.forEach(function (t) {
+      var d = document.createElement('div');
+      if (t.indexOf('ERROR') === 0) { d.className = 'err'; }
+      else if (/^(Done|DONE|Root SSH is enabled|Connected|Connection OK|VIN:)/.test(t)) { d.className = 'ok'; }
+      d.textContent = t; log.appendChild(d);
+    });
+    while (log.childNodes.length > 1500) { log.removeChild(log.firstChild); }
+    if (atEnd) { log.scrollTop = log.scrollHeight; }
+  }
+
+  function poll() {
+    if (polling) { return; }
+    polling = true;
+    api('/api/state').then(function (s) {
+      if (!s.ok) { $('#chip').textContent = s.status === 401 ? 'PIN needed' : 'Box not answering'; $('#chip').className = 'chip warn'; return; }
+      render(s);
+      return api('/api/log?since=' + cursor).then(function (l) { if (l.ok) { appendLog(l.lines); cursor = l.next; } });
+    }).then(function () { polling = false; }, function () { polling = false; });
+  }
+
+  function carFields() {
+    return { vin: $('#vin').value.trim().toUpperCase(), arch: $('#arch').value, ip: $('#ip').value.trim(),
+             gateway: $('#gateway').value.trim() || 'auto', key: $('#key').value.trim(), language: $('#language').value,
+             root_ip_override: $('#root_ip_override').checked };
+  }
+
+  function saveCar() {
+    api('/api/car', { method: 'POST', body: carFields() }).then(function (r) { if (!r.ok) { toast(r.error, 'err'); } else { poll(); } });
+  }
+  ['vin', 'arch', 'ip', 'gateway', 'key', 'language', 'root_ip_override'].forEach(function (f) { $('#' + f).addEventListener('change', saveCar); });
+  $('#backup').addEventListener('change', function () { if (state) { render(state); } });
+
+  function run(action) {
+    var body = { action: action, car: carFields() };
+    if (NEEDS_BACKUP[action]) {
+      if (!$('#backup').checked) { toast('Tick the backup confirmation first.', 'err'); return; }
+      body.confirm_backup = true;
+    }
+    if (action === 'store-install') { body.no_renderer = $('#no_renderer').checked; body.no_uplink = $('#no_uplink').checked; }
+    if (CONFIRM[action] && !confirm(CONFIRM[action])) { return; }
+    api('/api/run', { method: 'POST', body: body }).then(function (r) {
+      if (!r.ok) { toast(r.error || ('Refused (' + r.status + ')'), 'err'); }
+      poll();
+    });
+  }
+  document.querySelectorAll('[data-run]').forEach(function (b) { b.addEventListener('click', function () { run(b.dataset.run); }); });
+  $('#clear').addEventListener('click', function () { $('#log').innerHTML = ''; });
+
+  poll();
+  setInterval(poll, 1000);
+})();
+</script>
+</body>
+</html>

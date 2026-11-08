@@ -31,7 +31,7 @@ it. Stage C (App Store) needs internet at the car (or a prepared USB stick).
 """
 import argparse, io, json, os, queue, re, shutil, stat, subprocess, sys, tarfile, tempfile, threading
 
-VERSION = '1.6.0'
+VERSION = '1.7.0'
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 ROOT = os.environ.get('BIMMHACKS_APPS_ROOT') or os.path.join(REPO, 'idrive7-apps')
@@ -555,14 +555,22 @@ def do_backup_coding(log, vin=None, ip=None, gateway='auto', arch='id7', out_dir
 
 # -------------------------------------------------------------- stage C: the App Store (mgu-store)
 
-def do_store_install(node, ip, key, no_renderer=False, no_uplink=False, log=print):
-    """Install the on-car MGU App Store with the bundled mgu-install.js."""
+def do_store_install(node, ip, key, no_renderer=False, no_uplink=False, log=print, from_dir=None):
+    """Install the on-car MGU App Store with the bundled mgu-install.js.
+
+    from_dir: a folder `usb-repo` staged earlier (it holds mgu-repo/mgu-store): the Store package is
+    taken from there instead of GitHub, so this machine needs no internet (the Pocket box)."""
     if not os.path.isfile(STORE_JS):
         raise InstallerError('The App Store installer is missing (expected it in %s).' % STORE_DIR)
     if not key or not os.path.isfile(key):
         raise InstallerError('The car SSH key is needed. Do the root-access step first, or pick the key.')
-    log('Installing the MGU App Store on the head unit (needs internet at the car) ...')
+    if from_dir:
+        log('Installing the MGU App Store on the head unit from the package staged in %s ...' % from_dir)
+    else:
+        log('Installing the MGU App Store on the head unit (downloads the Store package; needs internet here) ...')
     argv = [node, STORE_JS, 'first-install', '--identity', key, '--no-restart-prompt']
+    if from_dir:
+        argv += ['--from', from_dir]
     if ip:
         argv += ['--host', ip]
     if no_renderer:

@@ -15,10 +15,12 @@ REPO = os.path.dirname(HERE)
 OUT_DIR = os.path.join(REPO, 'dist')
 
 TOP_FILES = ['Install Bimmhacks Apps.cmd', 'Install Bimmhacks Apps.command', 'install.sh',
-             'README.md', 'CLIENT-GUIDE.md', 'UPSTREAM.md', 'docs/MAKE-YOUR-OWN-APP.md']
+             'README.md', 'CLIENT-GUIDE.md', 'UPSTREAM.md', 'docs/MAKE-YOUR-OWN-APP.md', 'docs/POCKET.md']
 TREES = ['installer', 'idrive7-apps', 'tools']
 SKIP_DIRS = {'.git', '.github', '__pycache__', 'node_modules', 'oap-sdk', 'dist', 'preview', 'backups',
-             'work', 'captures', '.font-cache', 'build', 'coding-backups'}
+             'work', 'captures', '.font-cache', 'build', 'coding-backups',
+             # the Store package a Pocket box staged for itself (downloaded on the box, not shipped)
+             'pocket-store'}
 SKIP_PATHS = {'idrive7-apps/docs/media', 'idrive7-apps/docs/screens', 'idrive7-apps/kit/renderd/test',
               'idrive7-apps/kit/renderd/build',
               # tests and their fake car are for developers, not clients

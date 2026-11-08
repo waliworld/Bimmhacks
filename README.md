@@ -32,6 +32,11 @@ installer developed by Mr. Wali**; the apps, root tool and Store are open source
 
 Plus **coding snapshot**, **Status** and **Restore to stock**.
 
+**No laptop? Bimmhacks Pocket** is the phone version: a small box (a Raspberry Pi) on the ENET cable
+runs the same installer and serves a lightweight page over its own Wi-Fi — root access, the coding
+snapshot and the App Store from an iPhone or Android, with the same safety gates. Build and use:
+[docs/POCKET.md](docs/POCKET.md) (`installer/pocket_server.py`, `installer/pocket/setup-box.sh`).
+
 ![Installer window](installer/screenshot.png)
 
 ## Backing up the coding

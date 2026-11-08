@@ -70,6 +70,12 @@ This project bundles three upstream repositories, each copied unchanged except w
   guards — a refused flash must send the car nothing (`test_guards.py`) —, the root-access *enable* path end
   to end through the real tool and through the installer (`test_root_enable.py`), and the capture analyser
   on synthetic pcap/pcapng files (`test_pid_capture.py`).
+- `installer/pocket_server.py` + `installer/pocket/` is **Bimmhacks Pocket**: the same installer
+  functions behind a small HTTP/JSON server and a phone-sized page, for a box (a Raspberry Pi) on
+  the ENET cable; `setup-box.sh` turns a Pi into that box. It can stage the Store package on the box
+  (`usb-repo` + `first-install --from`) so the App Store installs with no internet on the box.
+  Tests: `installer/tests/test_pocket.py` (the gates, the read-only actions, the snapshot download
+  and the root ENABLE path through the server, all against the fake car).
 - `installer/bimmhacks_installer.py` is the window + CLI that drives all of the above. The flashing
   app, installer and Bimmhacks apps were developed by **Mr. Wali**.
 
