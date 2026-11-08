@@ -40,6 +40,15 @@ numbers up against what MHD's own logger shows for the same drive, work out the 
 entry for it to `custom_pids.json` (below). It is read-only like everything else, and a car that is not MHD-tuned
 simply refuses them (blank cells). This is *not* MHD's own PID list and not a copy of any MHD feature.
 
+### Finding out what a logger reads from *your* car
+
+Capture the ENET link with Wireshark while the logger runs on your own car, then run
+`python3 installer/pid_capture.py drive.pcapng` (or **Bimmhacks apps → Analyse a capture** in the installer). It pairs
+every request with the car's answer and reports each identifier the logger asked for — control unit, service, how
+often, answer length, refusals — and writes a `custom_pids.json` skeleton that logs the same identifiers raw, ready
+for you to fill in names and scales once you have lined the bytes up against the logger's own display. It reads the
+capture only and sends the car nothing.
+
 ### Your own PIDs: `custom_pids.json`
 
 Put a file named `custom_pids.json` in the app's data folder on the head unit (the Datalog page prints the exact

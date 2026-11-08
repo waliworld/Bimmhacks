@@ -379,6 +379,11 @@ async function poller() {
         assert.strictEqual(asked['4002'], 3);
         r.clock.t += REFUSED_MS; await r.step(3);
         assert.strictEqual(asked['4001'], 2, 'a refused value is retried after two minutes');
+        // a list where every value is refused: rounds go by with nothing read, and no rate is claimed
+        const r3 = rig(); wire.handler = (t, sid) => [0x7F, sid, 0x31];
+        r3.poller.setChannels([chan('x', '4101'), chan('y', '4102')]);
+        await r3.step(2); await r3.step(40, 300);
+        assert.strictEqual(r3.poller.rateHz, 0, 'nothing was read, so there is no measured rate');
         assert.ok(wire.sent.every((s) => s.timeout <= 1200), 'every request waited at most 1.2 s');
     })();
 

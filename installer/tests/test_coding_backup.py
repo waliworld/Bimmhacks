@@ -32,11 +32,8 @@ from fake_enet import FakeCar            # noqa: E402
 import coding_backup                      # noqa: E402
 import bimmhacks_installer as bi          # noqa: E402
 
-try:
-    import cryptography  # noqa: F401
-    HAVE_CRYPTO = True
-except ImportError:
-    HAVE_CRYPTO = False
+import importlib.util
+HAVE_CRYPTO = importlib.util.find_spec('cryptography') is not None
 
 VIN = 'WBA12345678901234'
 
@@ -78,7 +75,7 @@ class CodingSnapshot(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.out, True)
 
     def test_snapshot_contents_and_files(self):
-        with FakeCar(vin=VIN) as car:
+        with FakeCar(vin=VIN):
             snap = coding_backup.collect(gateway='127.0.0.1', vin=VIN, log=quiet)
             path = coding_backup.write(snap, self.out, log=quiet)
         self.assertEqual(snap['vin'], VIN)

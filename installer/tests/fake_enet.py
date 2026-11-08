@@ -11,8 +11,16 @@ and answers the read-only requests the coding snapshot and `status` use:
 
   22 F1 01   software identification (SVK): HWEL / CAFD / BTLD / SWFL records
   22 17 2A   head unit IP configuration
-  19 02 0C   fault memory
+  19 02 0C   fault memory (B7F8E5, the debug-mode DTC, while debug mode is on)
   22 F1 90   VIN
+and, for the root tool's `enable` / `persist` flow (never a flash):
+  31 01 A6 71      the enrollment challenge (64 hex characters)
+  31 01 A0 FD ...  the certificate install: status 0x00 (debug mode activated), counted in .enrolled
+  31 02 A0 FD      stop debug mode: B7F8E5 goes away (.debug_on = False)
+  31 03 A0 FD      the routine's results
+  10 xx / 3E 00    session control / tester present
+With ssh_port set it also listens there (and accepts, then closes), so the tool's "is port 22
+open" probe succeeds; the ssh command itself is faked by fake_ssh.sh on PATH.
 
 Everything else gets a negative reply (7F <sid> 11). Every request received is kept in
 FakeCar.requests as (destination address, payload bytes), so a test can assert what was - and,
@@ -40,15 +48,20 @@ def svk_record(t, version, a, b, c):
 
 
 class FakeCar:
+    CHALLENGE = '00112233445566778899AABBCCDDEEFF' * 2
+
     def __init__(self, vin='WBA12345678901234', svk=None, dtcs=None, mgu_ip='169.254.36.47',
-                 host='127.0.0.1', tcp_port=6801, udp_port=6811):
+                 host='127.0.0.1', tcp_port=6801, udp_port=6811, ssh_port=None, debug_on=True):
         self.vin = vin
         self.svk = DEFAULT_SVK if svk is None else svk
-        self.dtcs = [('B7F8E5', 0x08), ('480A01', 0x09)] if dtcs is None else dtcs
+        self.dtcs = [('480A01', 0x09)] if dtcs is None else list(dtcs)
+        self.debug_on = debug_on                  # the B7F8E5 DTC is reported while this is on
         self.mgu_ip = mgu_ip
-        self.host, self.tcp_port, self.udp_port = host, tcp_port, udp_port
+        self.host, self.tcp_port, self.udp_port, self.ssh_port = host, tcp_port, udp_port, ssh_port
         self.requests = []
         self.probes = 0
+        self.enrolled = 0                        # A0 FD installs accepted
+        self.ssh_connects = 0                    # connections to the fake port 22
         self._stop = threading.Event()
         self._threads = []
         self._socks = []
@@ -65,6 +78,16 @@ class FakeCar:
         udp.bind((self.host, self.udp_port))
         udp.settimeout(0.2)
         self._socks = [tcp, udp]
+        if self.ssh_port is not None:
+            sshs = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sshs.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sshs.bind((self.host, self.ssh_port))
+            sshs.listen(4)
+            sshs.settimeout(0.2)
+            self._socks.append(sshs)
+            t = threading.Thread(target=self._serve_ssh_port, args=(sshs,), daemon=True)
+            t.start()
+            self._threads.append(t)
         for fn, s in ((self._serve_tcp, tcp), (self._serve_udp, udp)):
             t = threading.Thread(target=fn, args=(s,), daemon=True)
             t.start()
@@ -101,8 +124,24 @@ class FakeCar:
         if payload[:3] == b'\x22\xF1\x90':
             return b'\x62\xF1\x90' + self.vin.encode('ascii')
         if payload[:3] == b'\x19\x02\x0C':
-            recs = b''.join(bytes.fromhex(code) + bytes([status]) for code, status in self.dtcs)
+            dtcs = ([('B7F8E5', 0x08)] if self.debug_on else []) + self.dtcs
+            recs = b''.join(bytes.fromhex(code) + bytes([status]) for code, status in dtcs)
             return b'\x59\x02\xFF' + recs
+        if payload[:4] == b'\x31\x01\xA6\x71':                 # enrollment challenge
+            return b'\x71\x01\xA6\x71' + self.CHALLENGE.encode('ascii')
+        if payload[:4] == b'\x31\x01\xA0\xFD':                 # certificate install -> debug mode on
+            self.enrolled += 1
+            self.debug_on = True
+            return b'\x71\x01\xA0\xFD\x00'
+        if payload[:4] == b'\x31\x02\xA0\xFD':                 # stop debug mode
+            self.debug_on = False
+            return b'\x71\x02\xA0\xFD'
+        if payload[:4] == b'\x31\x03\xA0\xFD':
+            return b'\x71\x03\xA0\xFD' + (b'\x00' if self.debug_on else b'\x01')
+        if sid == 0x10 and len(payload) >= 2:
+            return bytes((0x50, payload[1], 0x00, 0x32, 0x01, 0xF4))
+        if sid == 0x3E:
+            return b'\x7E\x00'
         return bytes((0x7F, sid, 0x11))                       # service not supported
 
     # ---- wire ---------------------------------------------------------------------------------
@@ -117,6 +156,20 @@ class FakeCar:
             self.probes += 1
             try:
                 sock.sendto(b'\x00\x00\x00\x00BMWVIN' + self.vin.encode('ascii') + b'\x00', addr)
+            except OSError:
+                pass
+
+    def _serve_ssh_port(self, srv):
+        while not self._stop.is_set():
+            try:
+                conn, _ = srv.accept()
+            except socket.timeout:
+                continue
+            except OSError:
+                return
+            self.ssh_connects += 1
+            try:
+                conn.close()
             except OSError:
                 pass
 

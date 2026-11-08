@@ -19,7 +19,10 @@ installer developed by Mr. Wali**; the apps, root tool and Store are open source
   (PolyForm Strict licence), through the Store the same way.
 - **Bimmhacks Apps** — apps developed in-house, from your own GitHub source. A working starter app,
   **Bimmhacks Hello**, ships in the Apps tab; copy it to build your own. Full walkthrough:
-  [docs/MAKE-YOUR-OWN-APP.md](docs/MAKE-YOUR-OWN-APP.md).
+  [docs/MAKE-YOUR-OWN-APP.md](docs/MAKE-YOUR-OWN-APP.md). The same tab has **Analyse a capture**:
+  give it a Wireshark capture of the ENET link recorded while a logger (MHD, BM3, ISTA …) ran on
+  *your own* car and it lists every identifier the logger read, and writes a `custom_pids.json` for
+  the Tuner that logs the same ones ([installer/pid_capture.py](installer/pid_capture.py)).
 - **Bimmhacks Tuner** (in the Apps tab, marked experimental) — our own app: live gauges (boost, load,
   timing, lambda, knock), a CSV datalogger with switchable **log packs** (tuning, engine, per-cylinder, the
   eight MHD-capture identifiers logged raw, and your own `custom_pids.json`), the engine unit's fault codes
@@ -75,6 +78,7 @@ python3 installer/bimmhacks_installer.py install-idrive-apps --key <id_rsa>   # 
 python3 installer/bimmhacks_installer.py install-our-apps --key <id_rsa> --repo owner/repo
 python3 installer/bimmhacks_installer.py status|restore --key <id_rsa>
 python3 installer/bimmhacks_installer.py apps                       # list apps + languages
+python3 installer/pid_capture.py drive.pcapng                       # identifiers a logger read (Wireshark capture)
 ```
 
 ## Requirements on the client PC

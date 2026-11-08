@@ -14,7 +14,7 @@
  * Clearing needs two presses within CONFIRM_MS: the first only arms it (nothing is sent), the second
  * sends. Reading is always allowed; nothing here writes anything but the clear.
  */
-const { parseDtcReply, statusInfo, hex, NRC, replyTo } = require('./kit/diag');
+const { parseDtcReply, statusInfo, hex, NRC } = require('./kit/diag');
 
 const DME = 0x12;
 const READ_PARAMS = [0x02, 0x0C];

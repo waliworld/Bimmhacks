@@ -20,11 +20,8 @@ sys.path.insert(0, os.path.join(REPO, 'tools', 'idrive7-8-ssh-root'))
 from fake_enet import FakeCar            # noqa: E402
 import bimmhacks_installer as bi          # noqa: E402
 
-try:
-    import cryptography  # noqa: F401
-    HAVE_CRYPTO = True
-except ImportError:
-    HAVE_CRYPTO = False
+import importlib.util
+HAVE_CRYPTO = importlib.util.find_spec('cryptography') is not None
 
 CLI = os.path.join(REPO, 'installer', 'bimmhacks_installer.py')
 VIN = 'WBA12345678901234'

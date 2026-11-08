@@ -47,6 +47,7 @@ class Poller {
         this.cycleMs = 0;             // the round's length, smoothed
         this.cycleStart = 0;
         this.readsThisCycle = 0;
+        this.okThisCycle = 0;         // answers in this round: only such rounds measure the rate
         this.silentSince = {};        // unit -> when the link first gave it up (it is woken wakeMs later)
         this.stats = { reads: 0, ok: 0, refused: 0, silent: 0, wakes: 0 };
     }
@@ -115,13 +116,14 @@ class Poller {
         if (!this.channels.length) return 500;
         const t0 = this.now();
         if (!this.queue.length) {
-            if (this.cycleStart) {
+            if (this.cycleStart && this.okThisCycle > 0) {             // a round the car answered nothing in says nothing about the rate
                 const d = t0 - this.cycleStart;
                 this.cycleMs = this.cycleMs ? 0.7 * this.cycleMs + 0.3 * d : d;
                 this.cycles++;
             }
             this.cycleStart = t0;
             this.readsThisCycle = 0;
+            this.okThisCycle = 0;
             this.queue = this._plan();
         }
         const key = this.queue.shift();
@@ -158,6 +160,7 @@ class Poller {
         if (v !== null) {
             st.v = v; st.t = now; st.ok = true; st.why = ''; st.fails = 0; st.until = 0;
             this.stats.ok++;
+            this.okThisCycle++;
         } else {
             st.ok = false; st.why = why; st.fails++;
             const refused = /^refused/.test(why);

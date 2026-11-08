@@ -98,8 +98,11 @@ mgu.run({
             const tq = G.isNum(d.torque) ? d.torque : 40, rpm = G.isNum(d.rpm) ? d.rpm : 850;
             const load = Math.max(8, Math.min(100, tq / 6));
             const boostBar = Math.max(-0.4, (tq - 120) / 420 * 1.3);
+            const timing = 38 - rpm / 7000 * 26 - load / 12;
             return { boostAbs: CH.STD_ATMOSPHERE_KPA + boostBar * 100, boostTarget: CH.STD_ATMOSPHERE_KPA + boostBar * 100 + 4,
-                load, timing: 38 - rpm / 7000 * 26 - load / 12, iat: 24 + load * 0.2 };
+                load, timing, iat: 24 + load * 0.2, ignition: timing,
+                lambda: load > 70 ? 0.88 + 0.015 * Math.sin(Date.now() / 700) : 1.0, lambdaTarget: load > 70 ? 0.88 : 1.0,
+                knock: load > 85 ? -1.5 : 0 };
         }
         const dmeValues = (d) => (d.demo ? demoDme(d) : poller.values());
 
@@ -140,6 +143,9 @@ mgu.run({
         /* ---------- pages ---------- */
         const mph = () => settings.get('speedUnit') === 'mph';
         const speed = (kmh) => (G.isNum(kmh) ? (mph() ? kmh / MPH : kmh) : null);
+        // the page's own buttons (Maps) call these; actions() and render() are function declarations below
+        const applyMap = async (n) => { selMap = n; actions(); await maps.setMap(n); return render(); };
+        const applyCooling = async (on) => { await maps.setCooling(on); return render(); };
 
         /**
          * A tile that is always drawn (the page must show the state in bar-button mode too); it is tappable only
@@ -188,7 +194,8 @@ mgu.run({
         function pidRow(c, status) {
             const v = row[c.key];
             const raw = c.src === 'raw';
-            const valueText = raw ? (typeof v === 'string' ? (v.length > 14 ? v.slice(0, 14) + '…' : v) : '--') : CH.fmt(v, c.d);
+            const isSpeed = c.key === 'speed';
+            const valueText = raw ? (typeof v === 'string' ? (v.length > 14 ? v.slice(0, 14) + '…' : v) : '--') : CH.fmt(isSpeed ? speed(v) : v, c.d);
             let state;
             if (c.src === 'car' || c.src === 'derived') state = { text: G.isNum(v) ? 'live' : 'no data', color: G.isNum(v) ? 'ok' : 'dim' };
             else if (demo) state = { text: G.isNum(v) ? 'demo' : 'no car', color: 'dim' };
@@ -200,7 +207,7 @@ mgu.run({
                         : s2 === 'no reply' ? { text: 'no reply', color: 'dim' }
                         : { text: '...', color: 'dim' };
             }
-            return [c.label, { text: valueText, color: state.color === 'ok' ? null : 'dim', font: 'num' }, c.unit || '', state];
+            return [c.label, { text: valueText, color: state.color === 'ok' ? null : 'dim', font: 'num' }, isSpeed ? (mph() ? 'mph' : 'km/h') : (c.unit || ''), state];
         }
 
         function drawPids(cv, t) {
@@ -261,7 +268,7 @@ mgu.run({
         }
 
         function drawFaults(cv, t) {
-            const sh = G.panel(cv, t, 24, 52, 1552, 460, 'Engine unit (DME) faults');
+            G.panel(cv, t, 24, 52, 1552, 460, 'Engine unit (DME) faults');
             if (faults.faults === null) {
                 cv.text(faults.note || 'Press Read faults', 48, 140, 34, faults.armed ? t.warn : t.dim, { font: 'bold' });
                 cv.text('Ignition on. Codes only; texts are in the Fault Scanner app.', 48, 182, 22, t.dim);
@@ -318,8 +325,6 @@ mgu.run({
             else { label('BTN_ACTION', 'Next map (' + selMap + ')'); label('BTN_ACTION2', 'Send map ' + selMap); ui.visible('BTN_ACTION2', true); }
         }
         const goto = (p) => { page = (p + PAGES.length) % PAGES.length; if (page !== P.LOG) logNote = ''; actions(); return render(); };
-        const applyMap = async (n) => { selMap = n; actions(); await maps.setMap(n); return render(); };
-        const applyCooling = async (on) => { await maps.setCooling(on); return render(); };
 
         function toggleLog() {
             if (logger.running) { logNote = ''; logger.stop('stopped'); }

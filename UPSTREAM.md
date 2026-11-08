@@ -61,9 +61,15 @@ This project bundles three upstream repositories, each copied unchanged except w
   runs a multi-map tune. It reuses, with attribution, M Vitals' engine-unit identifier lists
   (`config.dme`) and Engine Config's two map-switch commands (captured by a1-mapping, PR #23 of
   idrive7-apps). Tests: `idrive7-apps/kit/tools/test_bimmhacks_tuner.js`. It does not flash.
-- `installer/tests/` holds a fake ENET gateway (`fake_enet.py`) and tests that drive the real coding-snapshot,
-  VIN-detection and root-tool `status` code against it, and the installer's safety guards (a refused flash
-  must send the car nothing).
+- `installer/pid_capture.py` reads a Wireshark capture (pcap / pcapng) of the ENET link, or a root-tool
+  session log, and reports which diagnostic identifiers a logging tool asked the car for, writing a
+  `custom_pids.json` skeleton for Bimmhacks Tuner. Offline; it never talks to the car.
+- `installer/tests/` holds a fake ENET gateway (`fake_enet.py`, which also answers the root tool's
+  enrollment routines) and a fake `ssh` (`fake_ssh.sh`), with tests that drive the real coding-snapshot,
+  VIN-detection and root-tool `status` code against them (`test_coding_backup.py`), the installer's safety
+  guards — a refused flash must send the car nothing (`test_guards.py`) —, the root-access *enable* path end
+  to end through the real tool and through the installer (`test_root_enable.py`), and the capture analyser
+  on synthetic pcap/pcapng files (`test_pid_capture.py`).
 - `installer/bimmhacks_installer.py` is the window + CLI that drives all of the above. The flashing
   app, installer and Bimmhacks apps were developed by **Mr. Wali**.
 

@@ -5,7 +5,9 @@ eDrive, Live Data, G-Force, Warm-Up, Virtual Dyno, Brake Test, Drag Timer, Fault
 and more — and sets up an **on-car App Store** so you can add and update apps from the car screen
 later. Everything the installer changes is backed up first, and one button puts the car back to stock.
 
-The installer window has tabs: **Root access → Apps → App Store → idrive-apps → Bimmhacks Apps → Credits.**
+The installer window has sections: **Root access → Apps → App Store → More apps → Bimmhacks apps → Credits.**
+The **Car** panel at the top (VIN, head unit, root SSH key, IP address) is shared by all of them, and the
+**Activity** log at the bottom shows what every button did.
 
 > Flashing app and installer developed by **Mr. Wali**. Apps, root tool and Store are open source —
 > see the **Credits** tab.
@@ -29,17 +31,18 @@ The installer window has tabs: **Root access → Apps → App Store → idrive-a
    - It offers to relaunch as Administrator — say **Y** for the root-access step.
    - If Windows SmartScreen warns, click *More info* → *Run anyway*.
 
-### Tab — Root access (once per car)
+### Root access (once per car)
 
 Only needed if the car is **not already rooted**. Already have root SSH and the `id_rsa` key? Skip
-to the **Apps** tab and pick the key with *Browse*.
+to the **Apps** section and pick the key with *Browse* (the IP address is filled in from the key's
+`connect.txt`).
 
 > ⚠️ **Flashing reprograms the head unit and wipes its coding and BMW Digital Key pairings.**
 > Back up the coding first, and plan to re-pair digital keys. This is a one-time step; do not repeat it.
 
 **Backing up the coding — two things, both needed:**
 
-1. **Coding snapshot (this installer).** Click **Back up coding (snapshot)**. It reads the car over
+1. **Coding snapshot (this installer).** Click **Back up coding**. It reads the car over
    ENET and saves, under `coding-backups/`, exactly which **CAFD coding versions**, VIN, IP and
    faults are on the car. This records *what to restore* — it is **not** a restorable backup by
    itself.
@@ -50,26 +53,30 @@ to the **Apps** tab and pick the key with *Browse*.
 Then:
 
 1. Connect the ENET cable, wake the car.
-2. Click **Detect VIN** (or type the 17-char VIN). Pick the head-unit variant (id7 for iDrive 7).
+2. Click **Detect VIN** (or type the 17-char VIN). Pick the **Head unit** (id7 for iDrive 7).
 3. Take both backups above and tick the confirmation box.
-4. Click **Flash + Enable SSH (once)** and confirm. The unit reboots; this takes a few minutes.
-5. When it finishes, the car's SSH key is filled into the connection fields automatically.
+4. Click **Flash + enable SSH** and confirm. The unit reboots; this takes a few minutes.
+5. When it finishes, the car's SSH key **and** its IP address are filled into the Car panel
+   automatically (the root tool reads the head unit's address from the car itself — the IP field is
+   not used for this step).
    - **Enable (repair)**: re-opens SSH on an already-flashed car whose SSH stopped — no flashing.
    - **Fix refusing key**: only if SSH opens but login is refused (also needs the backup confirmation).
    - **Check state**: read-only; changes nothing.
+   - **Disable**: closes root SSH again.
 
 If coding is wiped, use the snapshot in `coding-backups/` to see which CAFD versions to restore,
 then restore them with BimmerCode or E-Sys.
 
-### Tab 2 — Apps
+### Apps
 
-1. Make sure the **Root SSH key** and **IP** are set (filled in by Tab 1, or *Browse* to the key).
+1. Make sure the **Root SSH key** and **IP address** are set (filled in by Root access, or *Browse*
+   to the key).
 2. Click **Test connection** — it must say *Connection OK*.
 3. Tick the apps you want and pick the language, then click **Install / Update apps**.
 4. On the iDrive: **Apps** → the new tiles (after 1-2 minutes, or after the reboot).
    - **Status** shows what is installed; **Restore to stock** removes everything.
 
-### Tab — App Store
+### App Store
 
 Installs the on-car **MGU App Store**, so you browse, install and update apps from the car screen
 afterwards (**Apps → Store**). The car needs internet for this (see above).
@@ -77,35 +84,28 @@ afterwards (**Apps → Store**). The car needs internet for this (see above).
 1. Make sure the car has internet, then click **Install the App Store**.
 2. When it finishes, restart the head unit (car **Settings**, or power-cycle) to see the Store tile.
 
-### Tab — idrive-apps
+**RideTube (YouTube)** sits next to it: click **Make it available**. RideTube is an unofficial
+YouTube client for the MGU (GPL-3, by JustAnotherPU): it plays on the car over the car's internet,
+shows the picture **only while parked**, and drops to a sound-only podcast view while driving. It is
+not affiliated with YouTube/Google. Install the App Store first; iDrive 7.
 
-Robert Nisipeanu's **cluster & HUD maps** (Waze / CarPlay map on the instrument cluster and HUD).
-These install through the on-car Store — install the **App Store** first; idrive-apps is a built-in
-Store source, so it appears there automatically.
+### More apps
 
-- Online car: click **Make idrive-apps available**, then on the car open **Apps → Store** and
-  install *Waze on cluster*.
-- Offline car: set a **Stage to** folder (a USB stick), click the button to download the apps onto
-  it, then on the car use **Apps → Store → USB**.
+Two more Store sources, each with its own card. Both install through the on-car Store — install the
+**App Store** first; both are built-in Store sources, so they appear there automatically.
 
-### App Store tab — RideTube (YouTube)
+- **Cluster & HUD maps (idrive-apps)** — Robert Nisipeanu's Waze / CarPlay map on the instrument
+  cluster and HUD. Online car: click **Make it available**, then on the car open **Apps → Store**
+  and install *Waze on cluster*. Offline car: set a **Stage to** folder (a USB stick), click the
+  button to download the apps onto it, then on the car use **Apps → Store → USB**.
+- **IterioDev car-apps (iDrive 8)** — Car Data, Drag Timer, Drive Recorder, eDrive, Fault Codes,
+  Live Adjustments, Overlays, Service, Tailscale. Most are **iDrive 8 only** (Drive Recorder also
+  runs on iDrive 7). Set **Head unit** to `id8-…` for an iDrive 8 car. Online or staged to USB the
+  same way. Licence: PolyForm Strict 1.0.0 (IterioDev); nothing from it is copied into this package.
 
-The App Store tab also has a one-click **Add RideTube** button. RideTube is an unofficial YouTube
-client for the MGU (GPL-3, by JustAnotherPU): it plays on the car over the car's internet, shows the
-picture **only while parked**, and drops to a sound-only podcast view while driving. It is not
-affiliated with YouTube/Google. Install the App Store first; iDrive 7.
+### Bimmhacks Tuner (Apps section, experimental)
 
-### Tab — car-apps (iDrive 8)
-
-IterioDev's apps and tools (Car Data, Drag Timer, Drive Recorder, eDrive, Fault Codes, Live
-Adjustments, Overlays, Service, Tailscale). Most are **iDrive 8 only** (Drive Recorder also runs on
-iDrive 7). Set **Variant** to `id8-…` for an iDrive 8 car. They install through the on-car Store —
-car-apps is a built-in source — online, or staged to a USB folder for offline cars. Licence:
-PolyForm Strict 1.0.0 (IterioDev).
-
-### Bimmhacks Tuner (Apps tab, experimental)
-
-Our own tuner companion, in the **Apps** tab (unticked by default; it asks for confirmation). On the car:
+Our own tuner companion, in the **Apps** section (unticked by default; it asks for confirmation). On the car:
 
 - **Gauges** — engine speed, boost, load, ignition timing, coolant, oil, intake air and torque, with
   session peaks and the last minute of boost.
@@ -125,13 +125,21 @@ Our own tuner companion, in the **Apps** tab (unticked by default; it asks for c
 needs a coding backup first. The tuner is new and has not been tested on a real car yet — tell the
 developer what your car does. Values the car does not answer show as `--` (and blank in the log).
 
-### Tab — Bimmhacks Apps
+### Bimmhacks apps
 
 Apps developed in-house (Mr. Wali). A starter app, **Bimmhacks Hello**, already appears in the
-**Apps** tab — install it to see a Bimmhacks app on the car, or copy it to build your own. To
+**Apps** section — install it to see a Bimmhacks app on the car, or copy it to build your own. To
 distribute your apps through the Store, publish them to your GitHub repo (default
-`waliworld/Bimmhacks`) and use this tab. The **How to make an app** button opens the full guide
+`waliworld/Bimmhacks`) and use this section. The **How to make an app** button opens the full guide
 (`docs/MAKE-YOUR-OWN-APP.md`): building an app, previewing it, and adding it to the App Store.
+
+**Analyse a capture** (the second card) answers "which identifiers does a logging tool read from
+*my* car?". Record the ENET link with Wireshark while a logger (MHD, BM3, ISTA …) runs on your own
+car, then pick the `.pcap` / `.pcapng` here. You get a report of every identifier it asked the car
+for — which control unit, how often, what the car answered — plus a ready `custom_pids.json` for
+Bimmhacks Tuner that logs the same identifiers raw. The root tool's own session logs work too. It
+reads the capture only; nothing is sent to the car. (Same thing without a window:
+`python3 installer/pid_capture.py drive.pcapng`.)
 
 ## macOS / Linux
 
@@ -161,6 +169,9 @@ python3 installer/bimmhacks_installer.py install-car-apps --key <id_rsa>
 python3 installer/bimmhacks_installer.py install-ridetube --key <id_rsa>   # YouTube client (unofficial)
 python3 installer/bimmhacks_installer.py install-our-apps --key <id_rsa> --repo owner/repo
 python3 installer/bimmhacks_installer.py usb-repo --stage /path/to/usb --repo robertnisipeanu/idrive-apps
+
+# which identifiers a logger read from your car (from a Wireshark capture of the ENET link)
+python3 installer/pid_capture.py drive.pcapng          # -> drive.pids.json + drive.custom_pids.json
 ```
 
 The root key is written to `tools/idrive7-8-ssh-root/data/enrollments/<VIN>/id_rsa`.
@@ -187,7 +198,7 @@ apps** again to bring them back.
 | Root access can't reach the car | Use the **ENET cable** (not Wi-Fi), ignition on. Windows: run as Administrator. |
 | *A valid 17-character VIN is needed* | Click **Detect VIN**, or type the VIN from the windshield. |
 | *MainApp … a version the patch does not know* | This firmware isn't supported yet. Nothing was changed. Contact us. |
-| *Could not log in to the head unit* | Do Tab 1 first, or *Browse* to the right `id_rsa`. Check the IP and that the car is awake. |
+| *Could not log in to the head unit* | Do **Root access** first, or *Browse* to the right `id_rsa`. Check the IP and that the car is awake. |
 | App Store step fails to download | The **car** needs internet (USB Ethernet / LTE / tethered phone / Wi-Fi). |
 | *'cryptography' could not be installed* | Run `python -m pip install --user cryptography`, then retry. |
 | *Node.js / OpenSSH missing* | Install Node LTS from nodejs.org; Windows OpenSSH: Settings → Apps → Optional features. |
