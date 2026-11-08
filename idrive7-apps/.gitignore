@@ -1,0 +1,48 @@
+# BMW's SDK - extract it from your own head unit (kit/tools/extract_sdk.js), never commit it
+oap-sdk
+# the unit's SOME/IP catalog (copied from your unit for check_signals.py / sigdoc.py)
+reference/
+# build output - every .mgu contains BMW's SDK, so don't publish these either
+dist/
+# keys / local stuff
+*.pem
+*.key
+node_modules/
+__pycache__/
+*.pyc
+.venv/
+.DS_Store
+/preview/
+# Claude Code's local files (launch configs, notes)
+.claude/
+kit/renderd/build/
+kit/renderd/protocol/*-protocol.c
+kit/renderd/protocol/*-client-protocol.h
+# fault texts for one car from a coding tool export (kit/tools/dtc_texts.py)
+apps/dtc_scanner/dtc_texts.js
+# fault text database (BMW's texts per control unit), imported with kit/tools/dtc_texts.py --db
+apps/dtc_scanner/dtc_db/
+# fault text tables (BMW's): kept out of git; kit/tools/dtc_tables.py puts them into dtc_db/tables
+/dtc_tables/
+dtc_scanner_*.json
+# Live Data catalogs (BMW's SGBD tables + their English texts), made by kit/tools/sgbd_catalog.py
+apps/live_data/catalog/
+
+# Doom: Freedoom data is downloaded by the build (app.json "assets")
+apps/doom/*.wad
+kit/tools/.font-cache/
+
+# Local vehicle diagnostics and build packages (packages contain the owner's SDK)
+/work/
+/captures/
+/backups/
+*.mgu
+*.tgz
+*.pcap
+*.pcapng
+*.dlt
+*.log
+*.core
+/kit/renderd/core
+/apps/zf8hp/data/
+egs-snapshot*.json

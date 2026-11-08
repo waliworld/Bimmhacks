@@ -1,0 +1,32 @@
+name: Client installer package
+
+on:
+  push:
+    branches: ['**']
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Installer self-check
+        run: |
+          python installer/bimmhacks_installer.py apps
+          python -m py_compile installer/bimmhacks_installer.py installer/make_client_package.py
+      - name: Build the client zip
+        run: python installer/make_client_package.py
+      - name: Check the zip has no BMW SDK or built apps
+        run: |
+          ! unzip -l dist/*.zip | grep -E 'oap-sdk/|\.mgu$'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Bimmhacks-iDrive7-Installer
+          path: dist/*.zip

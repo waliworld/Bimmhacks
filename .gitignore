@@ -1,0 +1,12 @@
+# BMW's SDK and everything built with it: made per car by the installer, never committed or shipped
+oap-sdk/
+dist/
+*.mgu
+# SSH keys / client data
+id_rsa
+*.pem
+*.key
+.bimmhacks-installer.json
+__pycache__/
+*.pyc
+.DS_Store

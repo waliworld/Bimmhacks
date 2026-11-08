@@ -1,0 +1,224 @@
+{
+  "id": "doom",
+  "title": "Doom",
+  "description": "Doom (Freedoom: Phase 1) on the iDrive. Main menu with all settings; the game drawn in full resolution across the whole screen, on the controller; BACK returns to the menu and saves",
+  "version": "1.7.19",
+  "vendor": "custom",
+  "loggingId": "OA9F",
+  "maxDiskUsage": 104857600,
+  "iconGlyph": "doom",
+  "signals": {
+    "de.bmw.infotainment.vehicle.Vehicle2": {
+      "statusCarSpeed2": "rs"
+    },
+    "de.bmw.infotainment.controlelements.FrontCCU": {
+      "statusRotaryEncoderState": "rs",
+      "statusPushButtonsState": "rs"
+    }
+  },
+  "assets": [
+    {
+      "file": "freedoom1.wad",
+      "sha256": "7323bcc168c5a45ff10749b339960e98314740a734c30d4b9f3337001f9e703d",
+      "url": "https://github.com/freedoom/freedoom/releases/download/v0.13.0/freedoom-0.13.0.zip",
+      "zipSha256": "3f9b264f3e3ce503b4fb7f6bdcb1f419d93c7b546f4df3e874dd878db9688f59",
+      "zipMember": "freedoom-0.13.0/freedoom1.wad"
+    }
+  ],
+  "screens": [
+    {
+      "name": "MAIN",
+      "kind": "menu",
+      "title": "Doom",
+      "settings": true,
+      "items": [
+        [
+          "button",
+          "BTN_PLAY",
+          "Play"
+        ],
+        [
+          "button",
+          "BTN_NEW",
+          "New game"
+        ],
+        [
+          "text",
+          "MENU_INFO",
+          ""
+        ]
+      ]
+    },
+    {
+      "name": "GAME",
+      "kind": "canvas",
+      "title": "Doom",
+      "chrome": false,
+      "buttons": [
+        [
+          "BTN_BACK",
+          "Back up"
+        ],
+        [
+          "BTN_TL",
+          "Turn left"
+        ],
+        [
+          "BTN_WL",
+          "Walk left"
+        ],
+        [
+          "BTN_STAND",
+          "Stand"
+        ],
+        [
+          "BTN_WALK",
+          "Walk"
+        ],
+        [
+          "BTN_WR",
+          "Walk right"
+        ],
+        [
+          "BTN_TR",
+          "Turn right"
+        ],
+        [
+          "BTN_WEAPON",
+          "Weapon"
+        ]
+      ]
+    }
+  ],
+  "settings": [
+    {"key": "parkedOnly", "label": "Parked only (pauses while driving)", "type": "bool", "default": true},
+    {
+      "key": "skill",
+      "label": "Difficulty (new game)",
+      "type": "choice",
+      "default": "3",
+      "options": [
+        [
+          "1",
+          "I'm too young to die"
+        ],
+        [
+          "2",
+          "Hey, not too rough"
+        ],
+        [
+          "3",
+          "Hurt me plenty"
+        ],
+        [
+          "4",
+          "Ultra-Violence"
+        ],
+        [
+          "5",
+          "Nightmare!"
+        ]
+      ]
+    },
+    {
+      "key": "episode",
+      "label": "Episode (new game)",
+      "type": "choice",
+      "default": "1",
+      "options": [
+        [
+          "1",
+          "1: Outpost Outbreak"
+        ],
+        [
+          "2",
+          "2: Military Labs"
+        ],
+        [
+          "3",
+          "3: Event Horizon"
+        ],
+        [
+          "4",
+          "4: Double Impact"
+        ]
+      ]
+    },
+    {
+      "key": "run",
+      "label": "Move speed",
+      "type": "choice",
+      "default": "slow",
+      "options": [
+        [
+          "slow",
+          "Slow walk (easiest to steer)"
+        ],
+        [
+          "walk",
+          "Walk"
+        ],
+        [
+          "run",
+          "Run"
+        ]
+      ]
+    },
+    {
+      "key": "aim",
+      "label": "Aim speed (controller turn)",
+      "type": "choice",
+      "default": "normal",
+      "options": [
+        [
+          "slow",
+          "Slow"
+        ],
+        [
+          "normal",
+          "Normal"
+        ],
+        [
+          "fast",
+          "Fast"
+        ]
+      ]
+    },
+    {
+      "key": "aimdir",
+      "label": "Aim direction",
+      "type": "choice",
+      "default": "normal",
+      "options": [
+        [
+          "normal",
+          "Normal"
+        ],
+        [
+          "reversed",
+          "Reversed"
+        ]
+      ]
+    },
+    {
+      "key": "detail",
+      "label": "Render resolution",
+      "type": "choice",
+      "default": "full",
+      "options": [
+        [
+          "full",
+          "Full: 1920 x 504, every screen pixel"
+        ],
+        [
+          "medium",
+          "Medium: 1440 x 378"
+        ],
+        [
+          "low",
+          "Low: 960 x 252"
+        ]
+      ]
+    }
+  ]
+}

@@ -1,0 +1,197 @@
+{
+  "id": "warmup",
+  "title": "Warm-Up",
+  "description": "Oil and coolant warm-up calculator (time to ready), safe rev limit and turbo cool-down",
+  "version": "1.7.3",
+  "vendor": "custom",
+  "loggingId": "OA9A",
+  "iconGlyph": "temp",
+  "signals": {
+    "de.bmw.infotainment.vehicle.CDS": {
+      "statusEngineSpeed2": "rs",
+      "statusEngineTemperature": "rs"
+    },
+    "de.bmw.infotainment.vehicle.Vehicle2": {
+      "statusCarSpeed2": "rs",
+      "statusVehiclePartType": "rs"
+    },
+    "de.bmw.infotainment.drivingexcitement.FES": {
+      "statusActualValueTorque2": "rs"
+    }
+  },
+  "screens": [
+    {
+      "name": "MAIN",
+      "kind": "canvas",
+      "title": "Warm-Up",
+      "buttons": [
+        [
+          "BTN_SETTINGS",
+          "Settings"
+        ]
+      ]
+    }
+  ],
+  "settings": [
+    {
+      "key": "warmOil",
+      "label": "Oil is warm at",
+      "type": "number",
+      "unit": "°C",
+      "default": 80,
+      "steps": [
+        60,
+        70,
+        75,
+        80,
+        85,
+        90,
+        100
+      ]
+    },
+    {
+      "key": "warmCoolant",
+      "label": "Coolant is warm at",
+      "type": "number",
+      "unit": "°C",
+      "default": 80,
+      "steps": [
+        60,
+        70,
+        75,
+        80,
+        85,
+        90
+      ]
+    },
+    {
+      "key": "engine",
+      "label": "Engine",
+      "type": "choice",
+      "default": "auto",
+      "options": [
+        ["auto", "Auto (from the car)"],
+        ["diesel", "Diesel"],
+        ["petrol", "Petrol"]
+      ]
+    },
+    {
+      "key": "coldLimit",
+      "label": "Rev limit when cold",
+      "type": "number",
+      "unit": "rpm",
+      "default": 0,
+      "labels": {"0": "Auto"},
+      "reset": 1,
+      "steps": [
+        0,
+        2000,
+        2500,
+        3000,
+        3500,
+        4000,
+        4500,
+        5000,
+        5500
+      ]
+    },
+    {
+      "key": "redline",
+      "label": "Redline",
+      "type": "number",
+      "unit": "rpm",
+      "default": 0,
+      "labels": {"0": "Auto"},
+      "reset": 1,
+      "steps": [
+        0,
+        4000,
+        4500,
+        5000,
+        5500,
+        5800,
+        6000,
+        6200,
+        6500,
+        6800,
+        7000,
+        7200,
+        7500,
+        7800,
+        8000,
+        8500,
+        9000
+      ]
+    },
+    {
+      "key": "cooldown",
+      "label": "Turbo cool-down after hard driving",
+      "type": "bool",
+      "default": true
+    },
+    {
+      "key": "tempUnit",
+      "label": "Temperature unit",
+      "type": "choice",
+      "default": "c",
+      "options": [
+        [
+          "c",
+          "Celsius"
+        ],
+        [
+          "f",
+          "Fahrenheit"
+        ]
+      ]
+    },
+    {
+      "key": "theme",
+      "label": "Colour theme",
+      "type": "choice",
+      "default": "m_tricolour",
+      "options": [
+        [
+          "m_red",
+          "M Red"
+        ],
+        [
+          "m_tricolour",
+          "M Tricolour"
+        ],
+        [
+          "ice",
+          "Ice White"
+        ],
+        [
+          "amber",
+          "Night Amber"
+        ]
+      ]
+    },
+    {"key": "layout", "label": "Screen layout", "type": "choice", "default": "full",
+     "options": [["full", "Full screen"], ["standard", "Standard"]]},
+    {"key": "renderer", "label": "Renderer", "type": "choice", "default": "auto",
+     "options": [["auto", "GPU 60 fps (default)"], ["software", "Software"]]},
+    {
+      "key": "demo",
+      "label": "Demo data",
+      "type": "choice",
+      "default": "auto",
+      "options": [
+        [
+          "auto",
+          "Auto"
+        ],
+        [
+          "on",
+          "Always"
+        ],
+        [
+          "off",
+          "Never"
+        ]
+      ]
+    }
+  ]
+}
