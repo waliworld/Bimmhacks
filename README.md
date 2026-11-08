@@ -1,4 +1,4 @@
-# Bimmhacks: iDrive 7 Flash & App Studio
+# Bimmhacks: MGU Flash & App Studio (iDrive 7 & 8)
 
 A clean one-window tool for BMW **MGU head units (iDrive 7)** that a client runs on their own PC. It
 takes a car from stock to installed apps, and bundles the tools for each stage. **Flashing app and
@@ -15,7 +15,11 @@ installer developed by Mr. Wali**; the apps, root tool and Store are open source
 - **idrive-apps** — make Robert Nisipeanu's
   [idrive-apps](https://github.com/robertnisipeanu/idrive-apps) (cluster / HUD maps) available
   through the Store, online or staged to USB.
-- **Bimmhacks Apps** — a tab for apps developed in-house, from your own GitHub source.
+- **car-apps** — [IterioDev's car-apps](https://github.com/IterioDev/car-apps), iDrive 8 focused
+  (PolyForm Strict licence), through the Store the same way.
+- **Bimmhacks Apps** — apps developed in-house, from your own GitHub source. A working starter app,
+  **Bimmhacks Hello**, ships in the Apps tab; copy it to build your own. Full walkthrough:
+  [docs/MAKE-YOUR-OWN-APP.md](docs/MAKE-YOUR-OWN-APP.md).
 - **Credits** — the people behind every part.
 
 Plus **coding snapshot**, **Status** and **Restore to stock**.
@@ -48,7 +52,7 @@ BimmerCode / E-Sys backup before it will flash.
 
 ```sh
 python3 installer/make_client_package.py
-# -> dist/Bimmhacks-iDrive7-Installer-<version>.zip  (no BMW SDK, no built apps, no client keys)
+# -> dist/Bimmhacks-MGU-Installer-<version>.zip  (no BMW SDK, no built apps, no client keys)
 ```
 
 GitHub Actions builds the same zip on every push (*Actions → Client installer package → artifact*),
@@ -84,6 +88,8 @@ python3 installer/bimmhacks_installer.py apps                       # list apps 
 - Root tool: **idrive7-8-ssh-root** by cauliflowermossgrape, public domain (Unlicense)
 - App Store: **mgu-store** by Robert Nisipeanu and IterioDev, GPL-3.0 (`tools/mgu-store/LICENSE`)
 - idrive-apps (cluster / HUD maps): Robert Nisipeanu and contributors, GPL-3.0
+- car-apps (iDrive 8 apps & tools): IterioDev, PolyForm Strict 1.0.0 (not vendored — installed from
+  its own repo through the Store)
 - Doom app: GPL-2.0, source in `idrive7-apps/third_party/`
 
 Keep each tool's licence and the credits the installer shows (Credits tab). The apps' authors ask

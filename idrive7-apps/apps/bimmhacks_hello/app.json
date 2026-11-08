@@ -1,0 +1,25 @@
+{
+  "id": "bimmhacks_hello",
+  "title": "Bimmhacks Hello",
+  "description": "A starter app by Bimmhacks: a canvas screen, a button and a couple of settings. Copy this to build your own.",
+  "version": "1.0.0",
+  "vendor": "bimmhacks",
+  "loggingId": "OABH",
+  "iconGlyph": "service",
+  "screens": [
+    {
+      "name": "MAIN",
+      "kind": "canvas",
+      "title": "Bimmhacks Hello",
+      "buttons": [
+        ["BTN_ACTION", "Count"],
+        ["BTN_SETTINGS", "Settings"]
+      ]
+    }
+  ],
+  "settings": [
+    {"key": "accent", "label": "Accent colour", "type": "choice", "default": "blue",
+      "options": [["blue", "Bimmhacks Blue"], ["red", "M Red"], ["green", "Signal Green"]]},
+    {"key": "big", "label": "Large text", "type": "bool", "default": false}
+  ]
+}

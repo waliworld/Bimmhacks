@@ -42,13 +42,22 @@ This project bundles three upstream repositories, each copied unchanged except w
   (offline). The installer's "idrive-apps" and "Bimmhacks Apps" tabs use that path, so nothing from
   the repo needs to ship in the client package.
 
+## 5. car-apps (IterioDev/car-apps) — not vendored
+
+- **Repository:** https://github.com/IterioDev/car-apps (**PolyForm Strict 1.0.0** — NOT open
+  source; do not copy or redistribute it). It is a built-in **mgu-store** source, installed through
+  the on-car Store or staged to USB at the car owner's choice. Nothing from it is copied into this
+  repository; the installer only points the Store at it.
+
 ## Bimmhacks additions (not upstream)
 
 - `installer/coding_backup.py` reads a diagnostic coding snapshot (CAFD versions / VIN / IP / faults)
   over ENET by reusing the vendored `mgu7` package. It is a record of what to restore, not a
   restorable coding backup.
+- `idrive7-apps/apps/bimmhacks_hello/` is a small original example app (MIT, part of this project)
+  that builds with the idrive7-apps kit; it is the starter for `docs/MAKE-YOUR-OWN-APP.md`.
 - `installer/bimmhacks_installer.py` is the window + CLI that drives all of the above. The flashing
-  app and installer were developed by **Mr. Wali**.
+  app, installer and Bimmhacks apps were developed by **Mr. Wali**.
 
 ## Updating to newer upstream versions
 

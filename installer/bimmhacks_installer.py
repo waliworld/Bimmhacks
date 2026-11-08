@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bimmhacks iDrive 7 App Installer.
+"""Bimmhacks MGU Flash & App Studio (BMW iDrive 7 and iDrive 8 head units).
 
 One tool that takes a client from a stock car to installed apps, in three stages:
 
@@ -31,7 +31,7 @@ it. Stage C (App Store) needs internet at the car (or a prepared USB stick).
 """
 import argparse, io, json, os, queue, re, shutil, stat, subprocess, sys, tarfile, tempfile, threading
 
-VERSION = '1.2.0'
+VERSION = '1.3.0'
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 ROOT = os.environ.get('BIMMHACKS_APPS_ROOT') or os.path.join(REPO, 'idrive7-apps')
@@ -559,8 +559,10 @@ def do_store_install(node, ip, key, no_renderer=False, no_uplink=False, log=prin
 
 # the Store's built-in sources ship with first-install; these two tabs are about these repos
 IDRIVE_APPS_REPO = 'robertnisipeanu/idrive-apps'
-# our own apps: override with BIMMHACKS_APPS_REPO=owner/repo once the repo exists
-BIMMHACKS_APPS_REPO = os.environ.get('BIMMHACKS_APPS_REPO', '')
+CARAPPS_REPO = 'IterioDev/car-apps'          # iDrive 8 focused apps and tools (PolyForm Strict licence)
+# our own apps: the repo that holds the Bimmhacks apps (defaults to this project's own repo)
+BIMMHACKS_APPS_REPO = os.environ.get('BIMMHACKS_APPS_REPO', 'waliworld/Bimmhacks')
+APP_GUIDE = os.path.join(REPO, 'docs', 'MAKE-YOUR-OWN-APP.md')
 
 
 def do_usb_repo(node, dest, inputs, log=print):
@@ -690,11 +692,12 @@ GOOD = '#1f9d55'
 WARN = '#b42318'
 
 CREDITS = [
-    ('Flashing app & Bimmhacks installer', 'Developed by Mr. Wali'),
+    ('Flashing app, installer & Bimmhacks apps', 'Developed by Mr. Wali'),
     ('MGU custom apps (idrive7-apps)', 'cauliflowermossgrape - MIT'),
     ('Root over ENET (idrive7-8-ssh-root)', 'cauliflowermossgrape - public domain'),
     ('MGU App Store (mgu-store)', 'Robert Nisipeanu & IterioDev - GPL-3.0'),
     ('idrive-apps (cluster / HUD maps)', 'Robert Nisipeanu & contributors - GPL-3.0'),
+    ('car-apps (iDrive 8 apps & tools)', 'IterioDev - PolyForm Strict 1.0.0'),
     ('Doom engine (doomgeneric) + Freedoom', 'id Software lineage / Freedoom - GPL-2.0'),
 ]
 
@@ -711,7 +714,7 @@ def run_gui():
     buttons = []
 
     root = tk.Tk()
-    root.title('Bimmhacks  -  iDrive 7 Flash & App Studio')
+    root.title('Bimmhacks  -  MGU Flash & App Studio  (iDrive 7 & 8)')
     root.minsize(900, 760)
     root.configure(bg=SURFACE)
 
@@ -760,7 +763,7 @@ def run_gui():
     inner.pack(fill='x', padx=20, pady=14)
     tk.Label(inner, text='BIMMHACKS', bg=INK, fg='#ffffff',
              font=(base_font[0], 19, 'bold')).pack(side='left')
-    tk.Label(inner, text='iDrive 7 / MGU  -  flash, root & app studio', bg=INK, fg='#aeb6c2',
+    tk.Label(inner, text='BMW MGU / iDrive 7 & 8  -  flash, root & app studio', bg=INK, fg='#aeb6c2',
              font=(base_font[0], 10)).pack(side='left', padx=(12, 0), pady=(7, 0))
     tk.Label(inner, text='by Mr. Wali', bg=INK, fg=ACCENT,
              font=(base_font[0], 10, 'bold')).pack(side='right', pady=(6, 0))
@@ -1098,15 +1101,53 @@ def run_gui():
     ttk.Button(ib, text='Open repository', command=lambda: _open_url(
         'https://github.com/robertnisipeanu/idrive-apps')).pack(side='left', padx=4)
 
-    # ========================= Tab 5: Bimmhacks Apps (ours) =====================================
+    # ========================= Tab 5: car-apps (iDrive 8) =======================================
+    t_car = ttk.Frame(nb)
+    nb.add(t_car, text='car-apps (iD8)')
+    cC = card(t_car)
+    eyebrow(cC, 'MORE APPS  -  ITERIODEV/CAR-APPS  -  IDRIVE 8')
+    title(cC, 'IterioDev car-apps (iDrive 8 focused)')
+    para(cC, 'Car Data, Drag Timer, Drive Recorder, eDrive, Fault Codes, Live Adjustments, Overlays, '
+             'Service and Tailscale by IterioDev. Most are iDrive 8 only (Drive Recorder also runs on '
+             'iDrive 7). They install through the on-car Store - car-apps is a built-in source, so it '
+             'appears there automatically; set the Variant above to id8 for an iDrive 8 car.')
+    para(cC, 'Licence: PolyForm Strict 1.0.0 (IterioDev). Offline car? Stage to a USB stick, then '
+             'install from Apps > Store > USB.')
+    stage_car = tk.StringVar(value=cfg.get('stage_car', ''))
+    crow = tk.Frame(cC, bg=PANEL)
+    crow.pack(fill='x', padx=16, pady=(6, 2))
+    ttk.Label(crow, text='Stage to (optional USB / folder)', style='CardMuted.TLabel').pack(side='left')
+    ttk.Entry(crow, textvariable=stage_car, width=36).pack(side='left', padx=8)
+    ttk.Button(crow, text='Choose', command=lambda: pick_stage(stage_car)).pack(side='left')
+    cb2 = tk.Frame(cC, bg=PANEL)
+    cb2.pack(fill='x', padx=14, pady=(10, 14))
+
+    def on_carapps():
+        _, key, ip, _ = conn_values()
+        save_config(dict(load_config(), stage_car=stage_car.get().strip()))
+        if not messagebox.askokcancel('car-apps', 'Make IterioDev car-apps available on the car at %s?\n\n'
+                                      'Mostly iDrive 8 apps. Installs the Store if needed; needs internet '
+                                      'on this PC.' % ip):
+            return
+        def w():
+            do_install_apps_source(need_node(), ip, key, CARAPPS_REPO, 'car-apps (IterioDev, iDrive 8)',
+                                   stage_dir=stage_car.get().strip() or None, log=log)
+        start(w, 'car-apps ready - install them from the car Store.')
+    ttk.Button(cb2, text='Make car-apps available', style='Accent.TButton',
+               command=on_carapps).pack(side='left', padx=4)
+    ttk.Button(cb2, text='Open repository', command=lambda: _open_url(
+        'https://github.com/IterioDev/car-apps')).pack(side='left', padx=4)
+
+    # ========================= Tab 6: Bimmhacks Apps (ours) =====================================
     t_our = ttk.Frame(nb)
     nb.add(t_our, text='Bimmhacks Apps')
     c5 = card(t_our)
     eyebrow(c5, 'IN-HOUSE  -  DEVELOPED BY US')
     title(c5, 'Bimmhacks Apps')
-    para(c5, 'Apps developed in-house by the Bimmhacks team (Mr. Wali). Point this at your own GitHub '
-             'repository of packaged apps; it installs through the on-car Store, the same way the other '
-             'sources do. Leave it blank until the repository is published.')
+    para(c5, 'Apps developed in-house by the Bimmhacks team (Mr. Wali). A starter app, '
+             '"Bimmhacks Hello", ships in the Apps tab already - copy it to build your own. Publish '
+             'your apps to the GitHub repo below and they install through the on-car Store, the same '
+             'way the other sources do. The guide below walks through building and publishing an app.')
     our_repo = tk.StringVar(value=cfg.get('our_repo', BIMMHACKS_APPS_REPO))
     orow = tk.Frame(c5, bg=PANEL)
     orow.pack(fill='x', padx=16, pady=(6, 2))
@@ -1139,8 +1180,11 @@ def run_gui():
                                    stage_dir=stage_our.get().strip() or None, log=log)
         start(w, 'Bimmhacks Apps source ready - install from the car Store.')
     ttk.Button(obf, text='Make our apps available', style='Accent.TButton', command=on_our).pack(side='left', padx=4)
+    ttk.Button(obf, text='How to make an app', command=lambda: _open_path(APP_GUIDE)).pack(side='left', padx=4)
+    ttk.Button(obf, text='Open our repo', command=lambda: _open_url(
+        'https://github.com/' + (our_repo.get().strip() or BIMMHACKS_APPS_REPO))).pack(side='left', padx=4)
 
-    # ========================= Tab 6: Credits ===================================================
+    # ========================= Tab 7: Credits ===================================================
     t_cred = ttk.Frame(nb)
     nb.add(t_cred, text='Credits')
     c6 = card(t_cred)
@@ -1206,7 +1250,7 @@ def run_gui():
             collect(ch)
     collect(body)
 
-    log('Bimmhacks iDrive 7 Flash & App Studio  v%s' % VERSION)
+    log('Bimmhacks MGU Flash & App Studio (iDrive 7 & 8)  v%s' % VERSION)
     log('Flashing app developed by Mr. Wali. Apps: %d. Languages: %s.' % (len(apps), ', '.join(langs)))
     log('Work left to right: Root access -> Apps -> App Store -> more sources.')
     root.after(100, pump)
@@ -1221,6 +1265,22 @@ def _open_url(url):
         pass
 
 
+def _open_path(path):
+    """Open a local file with the OS default app (the app-making guide)."""
+    try:
+        if not os.path.isfile(path):
+            _open_url('https://github.com/' + BIMMHACKS_APPS_REPO + '/blob/main/docs/MAKE-YOUR-OWN-APP.md')
+            return
+        if IS_WIN:
+            os.startfile(path)  # noqa
+        elif sys.platform == 'darwin':
+            subprocess.Popen(['open', path])
+        else:
+            subprocess.Popen(['xdg-open', path])
+    except Exception:
+        _open_url('file://' + path)
+
+
 # ----------------------------------------------------------------------------- command line
 
 ROOT_ACTIONS = {'root-status': 'status', 'root-flash': 'flash', 'root-enable': 'enable',
@@ -1228,12 +1288,12 @@ ROOT_ACTIONS = {'root-status': 'status', 'root-flash': 'flash', 'root-enable': '
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description='Bimmhacks iDrive 7 App Installer')
+    ap = argparse.ArgumentParser(description='Bimmhacks MGU Flash & App Studio (iDrive 7 & 8)')
     ap.add_argument('action', nargs='?', default='gui',
                     choices=['gui', 'install', 'test', 'status', 'restore', 'apps',
                              'root-status', 'root-flash', 'root-enable', 'root-fix-key', 'root-disable',
                              'detect-vin', 'backup-coding', 'store-install',
-                             'install-idrive-apps', 'install-our-apps', 'usb-repo'])
+                             'install-idrive-apps', 'install-car-apps', 'install-our-apps', 'usb-repo'])
     ap.add_argument('apps', nargs='*', help='app ids for install (default: all non-experimental apps)')
     ap.add_argument('--key', help='root SSH private key (id_rsa from the root-access step)')
     ap.add_argument('--ip', help='head unit address (default: from connect.txt next to the key, else %s)' % DEFAULT_IP)
@@ -1297,12 +1357,15 @@ def main(argv=None):
             do_store_install(node, a.ip or ip_from_key(a.key) or DEFAULT_IP, a.key,
                              no_renderer=a.no_renderer, no_uplink=a.no_uplink, log=log)
             return
-        if a.action in ('install-idrive-apps', 'install-our-apps'):
-            if not a.key:
-                ap.error('--key is needed')
-            ip2 = a.ip or ip_from_key(a.key) or DEFAULT_IP
+        if a.action in ('install-idrive-apps', 'install-car-apps', 'install-our-apps'):
+            if not a.key and not a.stage:
+                ap.error('--key is needed (or --stage <folder> for an offline USB)')
+            ip2 = a.ip or (ip_from_key(a.key) if a.key else None) or DEFAULT_IP
             if a.action == 'install-idrive-apps':
                 do_install_apps_source(node, ip2, a.key, IDRIVE_APPS_REPO, 'idrive-apps (robertnisipeanu)',
+                                       stage_dir=a.stage, log=log)
+            elif a.action == 'install-car-apps':
+                do_install_apps_source(node, ip2, a.key, CARAPPS_REPO, 'car-apps (IterioDev, iDrive 8)',
                                        stage_dir=a.stage, log=log)
             else:
                 repo = a.repo or BIMMHACKS_APPS_REPO

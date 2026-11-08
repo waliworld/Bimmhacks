@@ -28,5 +28,5 @@ jobs:
           ! unzip -l dist/*.zip | grep -E 'oap-sdk/|\.mgu$|/enrollments/|/id_rsa( |$)'
       - uses: actions/upload-artifact@v4
         with:
-          name: Bimmhacks-iDrive7-Installer
+          name: Bimmhacks-MGU-Installer
           path: dist/*.zip

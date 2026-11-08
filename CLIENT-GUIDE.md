@@ -1,4 +1,4 @@
-# Bimmhacks iDrive 7 Apps: Client Guide
+# Bimmhacks MGU Apps: Client Guide (iDrive 7 & 8)
 
 Installs extra apps on BMWs with the **MGU head unit (iDrive 7)**: M Vitals, Redline, Service,
 eDrive, Live Data, G-Force, Warm-Up, Virtual Dyno, Brake Test, Drag Timer, Fault Scanner, Doom
@@ -23,7 +23,7 @@ The installer window has tabs: **Root access → Apps → App Store → idrive-a
 
 ## Windows
 
-1. Unzip `Bimmhacks-iDrive7-Installer-x.y.z.zip` (right-click → *Extract All*).
+1. Unzip `Bimmhacks-MGU-Installer-x.y.z.zip` (right-click → *Extract All*).
 2. Double-click **`Install Bimmhacks Apps.cmd`**.
    - If Python or Node.js is missing, it offers to install them. Press **Y** and accept.
    - It offers to relaunch as Administrator — say **Y** for the root-access step.
@@ -88,11 +88,21 @@ Store source, so it appears there automatically.
 - Offline car: set a **Stage to** folder (a USB stick), click the button to download the apps onto
   it, then on the car use **Apps → Store → USB**.
 
+### Tab — car-apps (iDrive 8)
+
+IterioDev's apps and tools (Car Data, Drag Timer, Drive Recorder, eDrive, Fault Codes, Live
+Adjustments, Overlays, Service, Tailscale). Most are **iDrive 8 only** (Drive Recorder also runs on
+iDrive 7). Set **Variant** to `id8-…` for an iDrive 8 car. They install through the on-car Store —
+car-apps is a built-in source — online, or staged to a USB folder for offline cars. Licence:
+PolyForm Strict 1.0.0 (IterioDev).
+
 ### Tab — Bimmhacks Apps
 
-Apps developed in-house (Mr. Wali). Enter your own GitHub **owner/repo** of packaged apps; it
-installs through the Store the same way. Leave it blank until the repository is published. Offline
-cars can be served from a staged USB folder, same as above.
+Apps developed in-house (Mr. Wali). A starter app, **Bimmhacks Hello**, already appears in the
+**Apps** tab — install it to see a Bimmhacks app on the car, or copy it to build your own. To
+distribute your apps through the Store, publish them to your GitHub repo (default
+`waliworld/Bimmhacks`) and use this tab. The **How to make an app** button opens the full guide
+(`docs/MAKE-YOUR-OWN-APP.md`): building an app, previewing it, and adding it to the App Store.
 
 ## macOS / Linux
 
@@ -118,6 +128,7 @@ python3 installer/bimmhacks_installer.py restore --key <id_rsa>
 # app store + more sources
 python3 installer/bimmhacks_installer.py store-install --key <id_rsa>
 python3 installer/bimmhacks_installer.py install-idrive-apps --key <id_rsa>
+python3 installer/bimmhacks_installer.py install-car-apps --key <id_rsa>
 python3 installer/bimmhacks_installer.py install-our-apps --key <id_rsa> --repo owner/repo
 python3 installer/bimmhacks_installer.py usb-repo --stage /path/to/usb --repo robertnisipeanu/idrive-apps
 ```

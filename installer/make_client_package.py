@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """make_client_package.py - pack the installer and the app sources into ONE zip for clients.
 
-    python3 installer/make_client_package.py            # -> dist/Bimmhacks-iDrive7-Installer-<version>.zip
+    python3 installer/make_client_package.py            # -> dist/Bimmhacks-MGU-Installer-<version>.zip
 
 The client unzips it and double-clicks "Install Bimmhacks Apps.cmd" (Windows) or
 "Install Bimmhacks Apps.command" (macOS). Left out: BMW's SDK and any built .mgu (never shipped,
@@ -15,7 +15,7 @@ REPO = os.path.dirname(HERE)
 OUT_DIR = os.path.join(REPO, 'dist')
 
 TOP_FILES = ['Install Bimmhacks Apps.cmd', 'Install Bimmhacks Apps.command', 'install.sh',
-             'README.md', 'CLIENT-GUIDE.md', 'UPSTREAM.md']
+             'README.md', 'CLIENT-GUIDE.md', 'UPSTREAM.md', 'docs/MAKE-YOUR-OWN-APP.md']
 TREES = ['installer', 'idrive7-apps', 'tools']
 SKIP_DIRS = {'.git', '.github', '__pycache__', 'node_modules', 'oap-sdk', 'dist', 'preview', 'backups',
              'work', 'captures', '.font-cache', 'build', 'coding-backups'}
@@ -50,7 +50,7 @@ def files():
 
 def main():
     os.makedirs(OUT_DIR, exist_ok=True)
-    top = 'Bimmhacks-iDrive7-Installer-' + version()
+    top = 'Bimmhacks-MGU-Installer-' + version()
     out = os.path.join(OUT_DIR, top + '.zip')
     count = 0
     with zipfile.ZipFile(out, 'w', zipfile.ZIP_DEFLATED, compresslevel=9) as z:
