@@ -88,6 +88,13 @@ Store source, so it appears there automatically.
 - Offline car: set a **Stage to** folder (a USB stick), click the button to download the apps onto
   it, then on the car use **Apps → Store → USB**.
 
+### App Store tab — RideTube (YouTube)
+
+The App Store tab also has a one-click **Add RideTube** button. RideTube is an unofficial YouTube
+client for the MGU (GPL-3, by JustAnotherPU): it plays on the car over the car's internet, shows the
+picture **only while parked**, and drops to a sound-only podcast view while driving. It is not
+affiliated with YouTube/Google. Install the App Store first; iDrive 7.
+
 ### Tab — car-apps (iDrive 8)
 
 IterioDev's apps and tools (Car Data, Drag Timer, Drive Recorder, eDrive, Fault Codes, Live
@@ -129,6 +136,7 @@ python3 installer/bimmhacks_installer.py restore --key <id_rsa>
 python3 installer/bimmhacks_installer.py store-install --key <id_rsa>
 python3 installer/bimmhacks_installer.py install-idrive-apps --key <id_rsa>
 python3 installer/bimmhacks_installer.py install-car-apps --key <id_rsa>
+python3 installer/bimmhacks_installer.py install-ridetube --key <id_rsa>   # YouTube client (unofficial)
 python3 installer/bimmhacks_installer.py install-our-apps --key <id_rsa> --repo owner/repo
 python3 installer/bimmhacks_installer.py usb-repo --stage /path/to/usb --repo robertnisipeanu/idrive-apps
 ```

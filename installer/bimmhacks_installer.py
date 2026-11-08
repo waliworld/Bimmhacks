@@ -560,6 +560,7 @@ def do_store_install(node, ip, key, no_renderer=False, no_uplink=False, log=prin
 # the Store's built-in sources ship with first-install; these two tabs are about these repos
 IDRIVE_APPS_REPO = 'robertnisipeanu/idrive-apps'
 CARAPPS_REPO = 'IterioDev/car-apps'          # iDrive 8 focused apps and tools (PolyForm Strict licence)
+RIDETUBE_REPO = 'JustAnotherPU/ridetube'     # RideTube: an unofficial YouTube client (GPL-3), parked-only video
 # our own apps: the repo that holds the Bimmhacks apps (defaults to this project's own repo)
 BIMMHACKS_APPS_REPO = os.environ.get('BIMMHACKS_APPS_REPO', 'waliworld/Bimmhacks')
 APP_GUIDE = os.path.join(REPO, 'docs', 'MAKE-YOUR-OWN-APP.md')
@@ -698,6 +699,7 @@ CREDITS = [
     ('MGU App Store (mgu-store)', 'Robert Nisipeanu & IterioDev - GPL-3.0'),
     ('idrive-apps (cluster / HUD maps)', 'Robert Nisipeanu & contributors - GPL-3.0'),
     ('car-apps (iDrive 8 apps & tools)', 'IterioDev - PolyForm Strict 1.0.0'),
+    ('RideTube (unofficial YouTube client)', 'JustAnotherPU - GPL-3.0'),
     ('Doom engine (doomgeneric) + Freedoom', 'id Software lineage / Freedoom - GPL-2.0'),
 ]
 
@@ -1062,6 +1064,34 @@ def run_gui():
         start(w, 'App Store installed. Restart the head unit to see its tile.')
     ttk.Button(sbf, text='Install the App Store', style='Accent.TButton', command=on_store).pack(side='left', padx=4)
 
+    ttk.Label(c3, text='POPULAR COMMUNITY SOURCE', style='Eyebrow.TLabel').pack(anchor='w', padx=16, pady=(14, 0))
+    para(c3, 'RideTube - an unofficial YouTube client for the MGU (GPL-3, by JustAnotherPU). It plays '
+             'on the car over the car\'s internet; the picture shows only while parked and drops to a '
+             'podcast view (sound only) while driving. iDrive 7. Install the Store first.')
+    stage_rt = tk.StringVar(value=cfg.get('stage_rt', ''))
+    rrow = tk.Frame(c3, bg=PANEL)
+    rrow.pack(fill='x', padx=16, pady=(4, 2))
+    ttk.Label(rrow, text='Stage to (optional USB / folder)', style='CardMuted.TLabel').pack(side='left')
+    ttk.Entry(rrow, textvariable=stage_rt, width=34).pack(side='left', padx=8)
+    ttk.Button(rrow, text='Choose', command=lambda: pick_stage(stage_rt)).pack(side='left')
+    rbf = tk.Frame(c3, bg=PANEL)
+    rbf.pack(fill='x', padx=14, pady=(8, 14))
+
+    def on_ridetube():
+        _, key, ip, _ = conn_values()
+        save_config(dict(load_config(), stage_rt=stage_rt.get().strip()))
+        if not messagebox.askokcancel('RideTube', 'Make the RideTube YouTube client available on the car '
+                                      'at %s?\n\nUnofficial, not affiliated with YouTube/Google. Video is '
+                                      'parked-only. Installs the Store if needed.' % ip):
+            return
+        def w():
+            do_install_apps_source(need_node(), ip, key, RIDETUBE_REPO, 'RideTube (YouTube, unofficial)',
+                                   stage_dir=stage_rt.get().strip() or None, log=log)
+        start(w, 'RideTube ready - add it from the car Store (JustAnotherPU/ridetube:releases).')
+    ttk.Button(rbf, text='Add RideTube (YouTube)', command=on_ridetube).pack(side='left', padx=4)
+    ttk.Button(rbf, text='Open repository', command=lambda: _open_url(
+        'https://github.com/JustAnotherPU/ridetube')).pack(side='left', padx=4)
+
     # ========================= Tab 4: idrive-apps ===============================================
     t_idr = ttk.Frame(nb)
     nb.add(t_idr, text='idrive-apps')
@@ -1293,7 +1323,8 @@ def main(argv=None):
                     choices=['gui', 'install', 'test', 'status', 'restore', 'apps',
                              'root-status', 'root-flash', 'root-enable', 'root-fix-key', 'root-disable',
                              'detect-vin', 'backup-coding', 'store-install',
-                             'install-idrive-apps', 'install-car-apps', 'install-our-apps', 'usb-repo'])
+                             'install-idrive-apps', 'install-car-apps', 'install-ridetube',
+                             'install-our-apps', 'usb-repo'])
     ap.add_argument('apps', nargs='*', help='app ids for install (default: all non-experimental apps)')
     ap.add_argument('--key', help='root SSH private key (id_rsa from the root-access step)')
     ap.add_argument('--ip', help='head unit address (default: from connect.txt next to the key, else %s)' % DEFAULT_IP)
@@ -1357,7 +1388,7 @@ def main(argv=None):
             do_store_install(node, a.ip or ip_from_key(a.key) or DEFAULT_IP, a.key,
                              no_renderer=a.no_renderer, no_uplink=a.no_uplink, log=log)
             return
-        if a.action in ('install-idrive-apps', 'install-car-apps', 'install-our-apps'):
+        if a.action in ('install-idrive-apps', 'install-car-apps', 'install-ridetube', 'install-our-apps'):
             if not a.key and not a.stage:
                 ap.error('--key is needed (or --stage <folder> for an offline USB)')
             ip2 = a.ip or (ip_from_key(a.key) if a.key else None) or DEFAULT_IP
@@ -1366,6 +1397,9 @@ def main(argv=None):
                                        stage_dir=a.stage, log=log)
             elif a.action == 'install-car-apps':
                 do_install_apps_source(node, ip2, a.key, CARAPPS_REPO, 'car-apps (IterioDev, iDrive 8)',
+                                       stage_dir=a.stage, log=log)
+            elif a.action == 'install-ridetube':
+                do_install_apps_source(node, ip2, a.key, RIDETUBE_REPO, 'RideTube (YouTube, unofficial)',
                                        stage_dir=a.stage, log=log)
             else:
                 repo = a.repo or BIMMHACKS_APPS_REPO
