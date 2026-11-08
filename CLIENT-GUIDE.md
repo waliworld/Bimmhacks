@@ -103,6 +103,21 @@ iDrive 7). Set **Variant** to `id8-…` for an iDrive 8 car. They install throug
 car-apps is a built-in source — online, or staged to a USB folder for offline cars. Licence:
 PolyForm Strict 1.0.0 (IterioDev).
 
+### Bimmhacks Tuner (Apps tab, experimental)
+
+Our own tuner companion, in the **Apps** tab (unticked by default; it asks for confirmation). On the car:
+
+- **Gauges** — engine speed, boost, load, ignition timing, coolant, oil, intake air and torque, with
+  session peaks and the last minute of boost.
+- **Datalog** — *Start log* / *Stop log* records the drive to a CSV on the head unit (newest 20 are
+  kept). It will not log the demo drive: with no live car data it says so.
+- **Faults** — the engine unit's fault codes. *Clear* needs two presses.
+- **Maps** — map 1–4 and Max Cooling **for a car that already runs an MHD multi-map tune**. It ships
+  **off** (*Settings → Map switching*); off means nothing is ever sent.
+
+**It never flashes or writes a tune.** It is new and has not been tested on a real car yet — tell the
+developer what your car does. Values the car does not answer show as `--` (and blank in the log).
+
 ### Tab — Bimmhacks Apps
 
 Apps developed in-house (Mr. Wali). A starter app, **Bimmhacks Hello**, already appears in the

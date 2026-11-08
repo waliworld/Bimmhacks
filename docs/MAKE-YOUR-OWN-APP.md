@@ -27,6 +27,13 @@ python kit/tools/build.py my_app          # -> dist/my_app@<version>.mgu
 Then install it with the **Bimmhacks installer → Apps tab** (your app shows up in the list), or
 publish it (section 5) so the on-car Store installs it.
 
+For a larger worked example — several pages, live signals, an engine-unit reader, a CSV datalogger,
+fault read/clear and a safety-gated command, each in its own tested module — read
+[`idrive7-apps/apps/bimmhacks_tuner`](../idrive7-apps/apps/bimmhacks_tuner) and its test
+`kit/tools/test_bimmhacks_tuner.js` (fake diagnostic links, no car needed). It is the pattern to follow
+for anything that sends commands: **off by default, one command at a time, confirm by echo, and a test
+for every guard.**
+
 > **Pick a unique id with a prefix** (`acme_gauges`, `bimmhacks_boost`). App ids are global on the
 > head unit; a bare name BMW already uses can hide the tile.
 

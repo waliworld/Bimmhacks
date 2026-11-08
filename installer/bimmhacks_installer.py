@@ -31,7 +31,7 @@ it. Stage C (App Store) needs internet at the car (or a prepared USB stick).
 """
 import argparse, io, json, os, queue, re, shutil, stat, subprocess, sys, tarfile, tempfile, threading
 
-VERSION = '1.3.0'
+VERSION = '1.4.0'
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 ROOT = os.environ.get('BIMMHACKS_APPS_ROOT') or os.path.join(REPO, 'idrive7-apps')
@@ -54,7 +54,8 @@ ARCHES = ('id7', 'id8-bdc3', 'id8-bcp')
 
 # apps that send control / write requests or are marked experimental upstream: off unless ticked
 EXPERIMENTAL = {'live_adjustments': 'sends DME requests once a tune is picked',
-                'zf8hp': 'read-only, verified EGS variants only'}
+                'zf8hp': 'read-only, verified EGS variants only',
+                'bimmhacks_tuner': 'new, not yet tested on a car; map switching ships off'}
 LANGUAGE_NAMES = {'en': 'English', 'ko': 'Korean', 'ru': 'Russian', 'zh-CN': 'Chinese (Simplified)'}
 CREDIT = ('Apps: "MGU Custom Apps" by cauliflowermossgrape (MIT licence), free original at '
           'https://github.com/cauliflowermossgrape/idrive7-apps')
@@ -1003,10 +1004,12 @@ def run_gui():
         if not picked:
             messagebox.showwarning('Bimmhacks', 'Pick at least one app.')
             return
-        if any(a in EXPERIMENTAL for a in picked) and not messagebox.askyesno(
-                'Experimental apps', 'You picked experimental apps (Engine Config / Transmission '
-                'Config). Engine Config can send control requests to the DME once a tune is selected '
-                'in its settings.\n\nInstall them anyway?'):
+        exp_picked = [t for a, t, _, e in apps if a in picked and e]
+        if exp_picked and not messagebox.askyesno(
+                'Experimental apps', 'You picked experimental apps:\n\n  ' + '\n  '.join(exp_picked) +
+                '\n\nThey are new or limited-tested. Engine Config and Bimmhacks Tuner can send control '
+                'requests to the engine unit, but only once you switch that on in their Settings '
+                '(both ship off).\n\nInstall them anyway?'):
             return
         if not messagebox.askokcancel('Install', 'Install %d app(s) on the car at %s?\n\nEverything '
                                       'changed is backed up first and can be undone with Restore to '

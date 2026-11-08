@@ -1,0 +1,341 @@
+{
+  "id": "bimmhacks_tuner",
+  "title": "Bimmhacks Tuner",
+  "description": "Live gauges (boost, load, timing, temperatures), a CSV datalogger, the engine unit's fault codes and, for a car that already runs a multi-map tune, map switching. Reads by default; never flashes or writes a tune",
+  "version": "1.0.0",
+  "vendor": "bimmhacks",
+  "loggingId": "OABT",
+  "iconGlyph": "engine",
+  "signals": {
+    "de.bmw.infotainment.vehicle.CDS": {
+      "statusEngineSpeed2": "rs",
+      "statusEngineTemperature": "rs"
+    },
+    "de.bmw.infotainment.vehicle.Vehicle2": {
+      "statusCarSpeed2": "rs"
+    },
+    "de.bmw.infotainment.vehicle.CDS2": {
+      "statusLongitudinalAccelerationMassCenter": "rs",
+      "statusLateralAccelerationMassCenter": "rs"
+    },
+    "de.bmw.infotainment.drivingexcitement.FES": {
+      "statusActualValueTorque2": "rs"
+    }
+  },
+  "screens": [
+    {
+      "name": "MAIN",
+      "kind": "canvas",
+      "title": "Bimmhacks Tuner",
+      "buttons": [
+        [
+          "BTN_ACTION",
+          "Action"
+        ],
+        [
+          "BTN_ACTION2",
+          "More"
+        ],
+        [
+          "BTN_PAGE",
+          "Next page"
+        ],
+        [
+          "BTN_PREV",
+          "Previous page"
+        ],
+        [
+          "BTN_SETTINGS",
+          "Settings"
+        ]
+      ]
+    }
+  ],
+  "settings": [
+    {
+      "key": "maps",
+      "label": "Map switching (car already tuned)",
+      "type": "choice",
+      "default": "off",
+      "options": [
+        [
+          "off",
+          "Off - nothing is sent"
+        ],
+        [
+          "mhd",
+          "MHD multi-map tune"
+        ]
+      ]
+    },
+    {
+      "key": "dmeReads",
+      "label": "Read engine unit values (boost, load, timing)",
+      "type": "bool",
+      "default": true
+    },
+    {
+      "key": "logRate",
+      "label": "Datalog rate",
+      "type": "number",
+      "unit": "Hz",
+      "default": 2,
+      "markDefault": true,
+      "steps": [
+        1,
+        2,
+        5
+      ]
+    },
+    {
+      "key": "speedUnit",
+      "label": "Speed unit",
+      "type": "choice",
+      "default": "kmh",
+      "options": [
+        [
+          "kmh",
+          "km/h"
+        ],
+        [
+          "mph",
+          "mph"
+        ]
+      ]
+    },
+    {
+      "key": "theme",
+      "label": "Colour theme",
+      "type": "choice",
+      "default": "m_tricolour",
+      "options": [
+        [
+          "m_red",
+          "M Red"
+        ],
+        [
+          "m_tricolour",
+          "M Tricolour"
+        ],
+        [
+          "ice",
+          "Ice White"
+        ],
+        [
+          "amber",
+          "Night Amber"
+        ]
+      ]
+    },
+    {
+      "key": "layout",
+      "label": "Screen layout",
+      "type": "choice",
+      "default": "full",
+      "options": [
+        [
+          "full",
+          "Full screen"
+        ],
+        [
+          "standard",
+          "Standard"
+        ]
+      ]
+    },
+    {
+      "key": "renderer",
+      "label": "Renderer",
+      "type": "choice",
+      "default": "auto",
+      "options": [
+        [
+          "auto",
+          "GPU 60 fps (default)"
+        ],
+        [
+          "software",
+          "Software"
+        ]
+      ]
+    },
+    {
+      "key": "demo",
+      "label": "Demo data",
+      "type": "choice",
+      "default": "auto",
+      "options": [
+        [
+          "auto",
+          "Auto"
+        ],
+        [
+          "on",
+          "Always"
+        ],
+        [
+          "off",
+          "Never"
+        ]
+      ]
+    }
+  ],
+  "config": {
+    "comment": "No scaling here: kit/car.js uses BMW's own. dme = the engine unit values, see its comment.",
+    "dme": {
+      "comment": "Engine unit (DME, 0x12; ecu 18 = 0x12) values, read with UDS 0x22 over the read-only diagnostic link. The candidate lists are M Vitals' own (idrive7-apps, MIT): the first candidate the car answers with a plausible number wins. value = raw * factor + offset. boost values are absolute kPa; the page shows gauge boost = absolute - outside air pressure (baro).",
+      "ecu": 18,
+      "iat": [
+        {
+          "did": "F40F",
+          "bytes": 1,
+          "at": 0,
+          "factor": 1,
+          "offset": -40,
+          "min": -40,
+          "max": 150
+        },
+        {
+          "did": "F477",
+          "bytes": 1,
+          "at": 1,
+          "factor": 1,
+          "offset": -40,
+          "min": -40,
+          "max": 150,
+          "note": "charge air cooler temperature, bank 1 sensor 1"
+        },
+        {
+          "obd": "0F",
+          "bytes": 1,
+          "at": 0,
+          "factor": 1,
+          "offset": -40,
+          "min": -40,
+          "max": 150,
+          "note": "the same PID with OBD service 01, for engine units that refuse F40F with NRC 31"
+        }
+      ],
+      "boostTarget": [
+        {
+          "did": "4AB0",
+          "bytes": 2,
+          "at": 0,
+          "factor": 0.00390625,
+          "offset": 0,
+          "min": 20,
+          "max": 400,
+          "note": "BMW boost pressure setpoint (absolute), hPa = raw * 10 / 256"
+        },
+        {
+          "did": "F470",
+          "bytes": 2,
+          "at": 1,
+          "factor": 0.03125,
+          "offset": 0,
+          "min": 20,
+          "max": 600,
+          "note": "OBD PID 0x70: commanded boost pressure A (absolute), 1/32 kPa"
+        },
+        {
+          "obd": "70",
+          "bytes": 2,
+          "at": 1,
+          "factor": 0.03125,
+          "offset": 0,
+          "min": 20,
+          "max": 600,
+          "note": "OBD service 01 PID 0x70 (same as F470)"
+        }
+      ],
+      "boostActual": [
+        {
+          "did": "580B",
+          "bytes": 2,
+          "at": 0,
+          "factor": 0.00390625,
+          "offset": 0,
+          "min": 20,
+          "max": 400,
+          "note": "BMW boost pressure actual (absolute), hPa = raw * 10 / 256"
+        },
+        {
+          "did": "F470",
+          "bytes": 2,
+          "at": 3,
+          "factor": 0.03125,
+          "offset": 0,
+          "min": 20,
+          "max": 600,
+          "note": "OBD PID 0x70: boost pressure sensor A (absolute), 1/32 kPa"
+        },
+        {
+          "obd": "70",
+          "bytes": 2,
+          "at": 3,
+          "factor": 0.03125,
+          "offset": 0,
+          "min": 20,
+          "max": 600,
+          "note": "OBD service 01 PID 0x70 (same as F470)"
+        }
+      ],
+      "loadActual": [
+        {
+          "did": "5813",
+          "bytes": 1,
+          "at": 0,
+          "factor": 0.75,
+          "offset": 0,
+          "min": 0,
+          "max": 191.25,
+          "note": "BMW actual relative air charge, % = raw * 0.75"
+        }
+      ],
+      "timing": [
+        {
+          "obd": "0E",
+          "bytes": 1,
+          "at": 0,
+          "factor": 0.5,
+          "offset": -64,
+          "min": -64,
+          "max": 63.5,
+          "note": "OBD service 01 PID 0x0E timing advance, degrees before TDC (cylinder 1)"
+        },
+        {
+          "did": "F40E",
+          "bytes": 1,
+          "at": 0,
+          "factor": 0.5,
+          "offset": -64,
+          "min": -64,
+          "max": 63.5,
+          "note": "the same PID over UDS 0x22"
+        }
+      ],
+      "baro": [
+        {
+          "did": "F433",
+          "bytes": 1,
+          "at": 0,
+          "factor": 1,
+          "offset": 0,
+          "min": 50,
+          "max": 115,
+          "note": "OBD PID 0x33 barometric pressure, kPa (101.3 when not available)"
+        },
+        {
+          "obd": "33",
+          "bytes": 1,
+          "at": 0,
+          "factor": 1,
+          "offset": 0,
+          "min": 50,
+          "max": 115,
+          "note": "OBD service 01 PID 0x33 (same as F433)"
+        }
+      ]
+    }
+  }
+}

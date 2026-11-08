@@ -17,6 +17,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
+      - name: Bimmhacks Tuner tests
+        run: node idrive7-apps/kit/tools/test_bimmhacks_tuner.js
       - name: Installer self-check
         run: |
           python installer/bimmhacks_installer.py apps

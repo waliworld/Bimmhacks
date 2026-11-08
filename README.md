@@ -20,6 +20,10 @@ installer developed by Mr. Wali**; the apps, root tool and Store are open source
 - **Bimmhacks Apps** — apps developed in-house, from your own GitHub source. A working starter app,
   **Bimmhacks Hello**, ships in the Apps tab; copy it to build your own. Full walkthrough:
   [docs/MAKE-YOUR-OWN-APP.md](docs/MAKE-YOUR-OWN-APP.md).
+- **Bimmhacks Tuner** (in the Apps tab, marked experimental) — our own app: live gauges (boost, load,
+  timing, temperatures), a CSV datalogger, the engine unit's fault codes and, for a car that *already*
+  runs a multi-map tune, map switching. **It never flashes or writes a tune**, and map switching ships
+  off. Not yet tested on a car. Details: [idrive7-apps/apps/bimmhacks_tuner/README.md](idrive7-apps/apps/bimmhacks_tuner/README.md).
 - **Credits** — the people behind every part.
 
 Plus **coding snapshot**, **Status** and **Restore to stock**.

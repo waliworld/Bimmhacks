@@ -56,6 +56,11 @@ This project bundles three upstream repositories, each copied unchanged except w
   restorable coding backup.
 - `idrive7-apps/apps/bimmhacks_hello/` is a small original example app (MIT, part of this project)
   that builds with the idrive7-apps kit; it is the starter for `docs/MAKE-YOUR-OWN-APP.md`.
+- `idrive7-apps/apps/bimmhacks_tuner/` is an original app (MIT, part of this project): gauges, CSV
+  datalogger, engine-unit fault read/clear and an off-by-default map switch for a car that already
+  runs a multi-map tune. It reuses, with attribution, M Vitals' engine-unit identifier lists
+  (`config.dme`) and Engine Config's two map-switch commands (captured by a1-mapping, PR #23 of
+  idrive7-apps). Tests: `idrive7-apps/kit/tools/test_bimmhacks_tuner.js`. It does not flash.
 - `installer/bimmhacks_installer.py` is the window + CLI that drives all of the above. The flashing
   app, installer and Bimmhacks apps were developed by **Mr. Wali**.
 
