@@ -61,7 +61,15 @@ installer, the same safety gates — and the phone is only the screen.
 5. **Step 2 · App Store**: **Install the App Store**. The box installs it from the package it staged;
    afterwards the **car** needs internet (USB Ethernet, LTE stick, tethered phone or Wi-Fi) to browse
    the Store: *Apps → Store* on the iDrive, after a head-unit restart.
-6. **Step 3 (optional)**: **Install recommended apps** builds and installs the MGU custom apps from the
+6. **More sources for the Store**: the Store already lists **idrive7-apps**, **idrive-apps** (cluster /
+   HUD maps) and **car-apps** (iDrive 8) once it is installed. **Add RideTube** (the unofficial YouTube
+   client) and **Add your repo** put further GitHub sources into the Store for you — the box asks the
+   Store's updater to add them, so there is nothing to type on the car screen. The apps are then a
+   normal download under *Apps → Store*. A freshly installed Store only starts its updater with the
+   head unit: if the page says to restart the head unit, do that, wait a minute and press the button
+   again. Your own repo needs a published Release with packaged apps (the guide, section 5) before the
+   Store can list anything from it.
+7. **Step 3 (optional)**: **Install recommended apps** builds and installs the MGU custom apps from the
    box itself (it reads the SDK from your own car, like the desktop installer). Slow on a small box;
    the Store does the same thing from the car screen.
 

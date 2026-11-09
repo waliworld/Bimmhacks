@@ -31,7 +31,7 @@ it. Stage C (App Store) needs internet at the car (or a prepared USB stick).
 """
 import argparse, io, json, os, queue, re, shutil, stat, subprocess, sys, tarfile, tempfile, threading
 
-VERSION = '1.7.0'
+VERSION = '1.8.0'
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 ROOT = os.environ.get('BIMMHACKS_APPS_ROOT') or os.path.join(REPO, 'idrive7-apps')
@@ -66,6 +66,10 @@ SDK_SOURCES = (
      '[ -n "$f" ] && cat "$f"', 'tgz'),
     ('cat /var/opt/public/oap/oap_12204/source/javascript/app.js', 'js'),
 )
+
+
+class Done(str):
+    """a worker's return value that replaces the window's fixed completion message"""
 
 
 class InstallerError(Exception):
@@ -245,6 +249,7 @@ class Car:
             lines.append(line)
             if echo:
                 self.log('  car> ' + line)
+        p.stdout.close()
         p.wait()
         return p.returncode, '\n'.join(lines)
 
@@ -627,33 +632,121 @@ def do_usb_repo(node, dest, inputs, log=print):
     return repo
 
 
-def do_install_apps_source(node, ip, key, repo, label, stage_dir=None, log=print):
-    """Make an extra app source available on the car. These apps are designed to be installed
-    through the on-car Store, so there are two honest paths:
+# ---- adding a source to the on-car Store ---------------------------------------------------------
+# The Store's updater takes a "source-add" request over its socket on the unit (mgu-store,
+# native/mgu-updater/README.md "The socket"); unit_add_source.js does that, sent over ssh and run
+# with the unit's own Node. These repos are the updater's default sources: nothing to add for them.
+STORE_SOURCE_JS = os.path.join(HERE, 'unit_add_source.js')
+DEPLOY_TOOL = '/var/opt/mgu-deploy/mgu-deploy.sh'      # the Store's deploy tool: present = Store installed
+BUILTIN_SOURCES = {'cauliflowermossgrape/idrive7-apps': 'idrive7-apps', IDRIVE_APPS_REPO.lower(): 'idrive-apps',
+                   CARAPPS_REPO.lower(): 'car-apps'}
+SOURCE_RE = re.compile(r'^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$')
+CHANNEL_RE = re.compile(r'^(releases|tags|branch(:\S+)?)$')
+
+
+class StoreNotReady(InstallerError):
+    """the Store is on the car but its updater is not running yet (it starts with the head unit): not a failure"""
+
+
+def store_present(car):
+    """is the on-car Store (its deploy tool) installed on this head unit?"""
+    _code, out = car.run('test -f %s && echo STORE_PRESENT; true' % DEPLOY_TOOL, echo=False)
+    return 'STORE_PRESENT' in out
+
+
+def add_store_source(car, repo, channel='releases', log=print):
+    """Add a GitHub repo as a source of the car's Store. -> 'added' or 'already'; raises with the
+    updater's reason otherwise. Read-only for the car apart from the Store's own sources.json."""
+    if not SOURCE_RE.match(repo or ''):
+        raise InstallerError('The source must be a GitHub owner/repo, e.g. JustAnotherPU/ridetube.')
+    if not CHANNEL_RE.match(channel or ''):
+        raise InstallerError('The channel must be releases, tags, branch or branch:<name>.')
+    if not os.path.isfile(STORE_SOURCE_JS):
+        raise InstallerError('unit_add_source.js is missing next to the installer.')
+    with open(STORE_SOURCE_JS, 'rb') as f:
+        script = f.read()
+    log('Adding %s (%s) as a source of the car\'s Store ...' % (repo, channel))
+    import shlex
+    code, out = car.run('/usr/bin/node - %s %s' % (shlex.quote(repo), shlex.quote(channel)),
+                        stdin_data=script, echo=False)
+    verdict = ''
+    for line in out.splitlines():
+        if line.strip():
+            log('  store> ' + line)
+        if line.startswith(('ADDED ', 'ALREADY ', 'WAITING:', 'ERROR:')):
+            verdict = line.strip()
+    if code == 0 and verdict.startswith('ADDED '):
+        return 'added'
+    if code == 0 and verdict.startswith('ALREADY '):
+        return 'already'
+    if code == 3 and verdict.startswith('WAITING:'):
+        raise StoreNotReady(verdict[len('WAITING:'):].strip())
+    why = verdict[len('ERROR:'):].strip() if verdict.startswith('ERROR:') else (out.strip()[-300:] or 'no answer from the car')
+    raise InstallerError('Could not add %s to the car\'s Store: %s' % (repo, why))
+
+
+def do_install_apps_source(node, ip, key, repo, label, stage_dir=None, log=print, channel='releases', from_dir=None):
+    """Make an extra app source available on the car. These apps install through the on-car Store:
 
       - stage_dir given  -> write the repo to a USB folder (works offline); the car installs it
                             from Apps > Store > USB. No car internet needed.
-      - no stage_dir     -> ensure the Store is installed so the source is available on the car
-                            (needs car internet). idrive-apps is a built-in source; a custom repo
-                            must be added once on the car (Settings > Add source) or staged to USB.
+      - no stage_dir     -> make sure the Store is installed (installing it if not; from_dir: the
+                            package staged on this machine), then ADD the repo to the Store's sources
+                            over ssh - the Store shows its apps once it has read them (car internet).
+                            A built-in source (idrive-apps, car-apps, idrive7-apps) is already there.
+    -> 'staged' | 'builtin' | 'added' | 'already'
     """
-    if not re.match(r'^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$', repo or ''):
+    if not SOURCE_RE.match(repo or ''):
         raise InstallerError('The source must be a GitHub owner/repo, e.g. robertnisipeanu/idrive-apps.')
     if stage_dir:
         log('Staging %s to %s for offline install on the car ...' % (label, stage_dir))
         do_usb_repo(node, stage_dir, ['github:' + repo], log=log)
         log('%s staged. Put the stick in the car and open Apps > Store > USB to install.' % label)
-        return
+        return 'staged'
     if not key or not os.path.isfile(key):
         raise InstallerError('The car SSH key is needed (or stage to a USB folder instead).')
-    log('Ensuring the on-car Store is present so %s is available ...' % label)
-    do_store_install(node, ip, key, log=log)
-    if repo == IDRIVE_APPS_REPO:
-        log('%s is a built-in Store source: on the car open Apps > Store, find the apps and Install.' % label)
-    else:
-        log('%s: add the source on the car once (Settings > Add source > %s), then install it there,'
-            % (label, repo))
-        log('or re-run this with a USB stage folder to deliver it without on-car typing.')
+    ssh = find_ssh()
+    if not ssh:
+        raise InstallerError('The OpenSSH client is missing. Windows: Settings > Apps > Optional features > '
+                             'add "OpenSSH Client"')
+    car = Car(ssh, ip, key, log=log)
+    try:
+        if not store_present(car):
+            log('The on-car Store is not installed yet - installing it first ...')
+            do_store_install(node, ip, key, log=log, from_dir=from_dir)
+        if repo.lower() in BUILTIN_SOURCES:
+            log('%s is a built-in Store source (%s): it is already in the car\'s Store. On the car open '
+                'Apps > Store, find the apps and Install.' % (label, BUILTIN_SOURCES[repo.lower()]))
+            return 'builtin'
+        try:
+            result = add_store_source(car, repo, channel, log=log)
+        except StoreNotReady as e:
+            log('The Store\'s updater is not running yet (%s).' % e)
+            log('It starts with the head unit: restart the head unit (car Settings, or power-cycle), wait a '
+                'minute, then add %s again.' % label)
+            return 'pending'
+        if result == 'already':
+            log('%s was already a source of the car\'s Store.' % label)
+        else:
+            log('%s added as a source of the car\'s Store.' % label)
+        log('On the car: Apps > Store - its apps appear once the Store has read the source (the car needs internet).')
+        log('(A source with no published Release, catalog or mgu-repo.json lists nothing: '
+            'docs/MAKE-YOUR-OWN-APP.md, section 5.)')
+        return result
+    finally:
+        car.close()
+
+
+def source_done_message(result, label):
+    """what to tell the user once do_install_apps_source has finished"""
+    return {
+        'staged': '%s staged - put the stick in the car and open Apps > Store > USB to install.' % label,
+        'builtin': '%s is a built-in source of the car\'s Store: open Apps > Store on the car and install.' % label,
+        'added': '%s was added to the car\'s Store: open Apps > Store on the car and install (the car needs internet to read it).' % label,
+        'already': '%s was already in the car\'s Store: open Apps > Store on the car.' % label,
+        'pending': 'The Store is installed, but its updater only starts with the head unit. Restart the head unit, '
+                   'wait a minute, then add %s again.' % label,
+    }.get(result, 'Done.')
 
 
 def do_install(ssh, node, ip, key, apps, language, reboot=True, controller_gate=True, keep_build=False, log=print):
@@ -1018,8 +1111,8 @@ def run_gui():
 
         def work():
             try:
-                work_fn()
-                q.put(('done', (True, done_msg)))
+                r = work_fn()
+                q.put(('done', (True, str(r) if isinstance(r, Done) else done_msg)))
             except InstallerError as e:
                 log('ERROR: ' + str(e))
                 q.put(('done', (False, str(e))))
@@ -1223,7 +1316,8 @@ def run_gui():
             if not messagebox.askokcancel(head, confirm % ip):
                 return
             def w():
-                do_install_apps_source(need_node(), ip, key, repo, label, stage_dir=stage.get().strip() or None, log=log)
+                r = do_install_apps_source(need_node(), ip, key, repo, label, stage_dir=stage.get().strip() or None, log=log)
+                return Done(source_done_message(r, label))
             start(w, done_msg)
         r = row(c)
         button(r, 'Make it available', go, style='Accent.TButton')
@@ -1235,9 +1329,10 @@ def run_gui():
                 'podcast view (sound only) while driving. GPL-3, by JustAnotherPU; not affiliated with YouTube '
                 'or Google. iDrive 7. Install the Store first.',
                 RIDETUBE_REPO, 'RideTube (YouTube, unofficial)', 'stage_rt',
-                'RideTube ready - add it from the car Store (JustAnotherPU/ridetube:releases).',
+                'RideTube is a source of the car\'s Store now - on the car open Apps > Store to install it.',
                 'Make the RideTube YouTube client available on the car at %s?\n\nUnofficial. Video is parked-only. '
-                'Installs the Store if needed.', 'https://github.com/JustAnotherPU/ridetube', padx=(6, 22), wrap=400)
+                'Installs the Store if needed, then adds JustAnotherPU/ridetube to its sources.',
+                'https://github.com/JustAnotherPU/ridetube', padx=(6, 22), wrap=400)
 
     # ======================================================= 4. More apps (idrive-apps, car-apps)
     p4 = section('More apps')
@@ -1267,8 +1362,9 @@ def run_gui():
     kicker(c5, 'In-house  ·  developed by us')
     title(c5, 'Bimmhacks apps')
     para(c5, 'Bimmhacks Tuner and the Bimmhacks Hello starter already ship in the Apps section. Publish your own '
-             'apps to the GitHub repo below and they install through the on-car Store like every other source. '
-             'The guide walks through building and publishing one.')
+             'apps to the GitHub repo below and they install through the on-car Store like every other source: the '
+             'button adds the repo to the Store for you. The Store lists apps once the repo has a published Release '
+             '(the guide walks through building and publishing one).')
     our_repo = tk.StringVar(value=cfg.get('our_repo', BIMMHACKS_APPS_REPO))
     stage_our = tk.StringVar(value=cfg.get('stage_our', ''))
     gg = tk.Frame(c5, bg=PANEL)
@@ -1293,8 +1389,9 @@ def run_gui():
         if not messagebox.askokcancel('Bimmhacks apps', 'Make %s available on the car at %s?' % (repo, ip)):
             return
         def w():
-            do_install_apps_source(need_node(), ip, key, repo, 'Bimmhacks Apps', stage_dir=stage_our.get().strip() or None, log=log)
-        start(w, 'Bimmhacks apps source ready - install from the car Store.')
+            r = do_install_apps_source(need_node(), ip, key, repo, 'Bimmhacks Apps', stage_dir=stage_our.get().strip() or None, log=log)
+            return Done(source_done_message(r, 'Bimmhacks Apps'))
+        start(w, 'Bimmhacks apps are a source of the car\'s Store now - install them from Apps > Store on the car.')
     ob = row(c5)
     button(ob, 'Make our apps available', on_our, style='Accent.TButton')
     button(ob, 'How to make an app', lambda: _open_path(APP_GUIDE))
@@ -1500,20 +1597,20 @@ def main(argv=None):
                 ap.error('--key is needed (or --stage <folder> for an offline USB)')
             ip2 = a.ip or (ip_from_key(a.key) if a.key else None) or DEFAULT_IP
             if a.action == 'install-idrive-apps':
-                do_install_apps_source(node, ip2, a.key, IDRIVE_APPS_REPO, 'idrive-apps (robertnisipeanu)',
-                                       stage_dir=a.stage, log=log)
+                repo, label = IDRIVE_APPS_REPO, 'idrive-apps (robertnisipeanu)'
             elif a.action == 'install-car-apps':
-                do_install_apps_source(node, ip2, a.key, CARAPPS_REPO, 'car-apps (IterioDev, iDrive 8)',
-                                       stage_dir=a.stage, log=log)
+                repo, label = CARAPPS_REPO, 'car-apps (IterioDev, iDrive 8)'
             elif a.action == 'install-ridetube':
-                do_install_apps_source(node, ip2, a.key, RIDETUBE_REPO, 'RideTube (YouTube, unofficial)',
-                                       stage_dir=a.stage, log=log)
+                repo, label = RIDETUBE_REPO, 'RideTube (YouTube, unofficial)'
             else:
-                repo = a.repo or BIMMHACKS_APPS_REPO
+                repo, label = a.repo or BIMMHACKS_APPS_REPO, 'Bimmhacks Apps'
                 if not repo:
                     raise InstallerError('No "our apps" repository set. Pass --repo owner/repo, or set '
                                          'BIMMHACKS_APPS_REPO.')
-                do_install_apps_source(node, ip2, a.key, repo, 'Bimmhacks Apps', stage_dir=a.stage, log=log)
+            result = do_install_apps_source(node, ip2, a.key, repo, label, stage_dir=a.stage, log=log)
+            log(source_done_message(result, label))
+            if result == 'pending':
+                sys.exit(3)         # not a failure, not done: the Store's updater starts with the head unit
             return
 
         if not a.key:

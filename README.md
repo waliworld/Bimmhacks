@@ -14,7 +14,10 @@ installer developed by Mr. Wali**; the apps, root tool and Store are open source
   client browses, installs and updates apps from the car screen afterwards.
 - **idrive-apps** — make Robert Nisipeanu's
   [idrive-apps](https://github.com/robertnisipeanu/idrive-apps) (cluster / HUD maps) available
-  through the Store, online or staged to USB.
+  through the Store, online or staged to USB. It is a built-in Store source: the Store lists it as
+  soon as it is installed. **RideTube** and your own repo are different: the installer **adds them
+  to the Store's sources for you** (it asks the Store's updater over ssh), so they are a normal
+  download under *Apps → Store* on the car.
 - **car-apps** — [IterioDev's car-apps](https://github.com/IterioDev/car-apps), iDrive 8 focused
   (PolyForm Strict licence), through the Store the same way.
 - **Bimmhacks Apps** — apps developed in-house, from your own GitHub source. A working starter app,

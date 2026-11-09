@@ -47,7 +47,16 @@ HOST_RE = re.compile(r'^[A-Za-z0-9.:\-\[\]%]+$')
 KEY_FILES = ('id_rsa', 'id_rsa.pkcs1.pem', 'id_rsa.pkcs8.pem', 'id_rsa.ppk', 'connect.txt')
 
 ACTIONS = ('detect-vin', 'backup-coding', 'root-status', 'root-enable', 'root-flash', 'root-fix-key',
-           'root-disable', 'test', 'status', 'store-install', 'install-apps', 'restore', 'stage-store')
+           'root-disable', 'test', 'status', 'store-install', 'install-apps', 'restore', 'stage-store', 'add-source')
+# the extra Store sources the page offers (the desktop window's App Store / More apps / Bimmhacks apps cards)
+SOURCES = [
+    {'id': 'ridetube', 'label': 'RideTube · unofficial YouTube client', 'repo': bi.RIDETUBE_REPO, 'channel': 'releases',
+     'builtin': False, 'note': 'GPL-3, by JustAnotherPU; not affiliated with YouTube or Google. Video only while parked; iDrive 7.'},
+    {'id': 'idrive-apps', 'label': 'Cluster & HUD maps (idrive-apps)', 'repo': bi.IDRIVE_APPS_REPO, 'channel': 'releases',
+     'builtin': True, 'note': 'Robert Nisipeanu. Waze / CarPlay map on the cluster and HUD.'},
+    {'id': 'car-apps', 'label': 'IterioDev car-apps (iDrive 8)', 'repo': bi.CARAPPS_REPO, 'channel': 'tags',
+     'builtin': True, 'note': 'Car Data, Drag Timer, Drive Recorder, Overlays … mostly iDrive 8. PolyForm Strict licence.'},
+]
 ROOT_ACTIONS = {'root-status': 'status', 'root-enable': 'enable', 'root-flash': 'flash',
                 'root-fix-key': 'fix-key', 'root-disable': 'disable'}
 DONE = {
@@ -64,6 +73,7 @@ DONE = {
     'install-apps': 'Apps installed - they appear under Apps on the iDrive.',
     'restore': 'The car is back to stock.',
     'stage-store': 'Store package downloaded onto the box - the App Store now installs without internet on the box.',
+    'add-source': 'Added to the car\'s Store - on the car open Apps > Store; the apps appear once it has read the source.',
 }
 
 
@@ -186,7 +196,8 @@ class Pocket(object):
                 'gateway': cfg.get('gateway') or 'auto', 'language': cfg.get('language') or 'en',
                 # root access normally probes the head unit at the address the car itself reports;
                 # this makes it use the IP field instead (a bridge or NAT between the box and the car)
-                'root_ip_override': bool(cfg.get('root_ip_override'))}
+                'root_ip_override': bool(cfg.get('root_ip_override')),
+                'our_repo': cfg.get('our_repo') or bi.BIMMHACKS_APPS_REPO}
 
     @staticmethod
     def save_car(fields):
@@ -223,6 +234,11 @@ class Pocket(object):
             new['language'] = lang
         if 'root_ip_override' in fields:
             new['root_ip_override'] = bool(fields['root_ip_override'])
+        if 'our_repo' in fields:
+            r = (fields.get('our_repo') or '').strip()
+            if r and not bi.SOURCE_RE.match(r):
+                raise Refused('Enter your source as owner/repo, e.g. waliworld/Bimmhacks.')
+            new['our_repo'] = r
         if new:
             bi.save_config(dict(bi.load_config(), **new))
         return Pocket.car()
@@ -237,7 +253,7 @@ class Pocket(object):
             'version': bi.VERSION,
             'busy': busy, 'since': round(time.time() - started, 1) if started else None,
             'last': last, 'chip': chip, 'log_total': total,
-            'car': self.car(), 'arches': list(bi.ARCHES), 'languages': bi.list_languages(),
+            'car': self.car(), 'arches': list(bi.ARCHES), 'languages': bi.list_languages(), 'sources': SOURCES,
             'box': {'host': socket.gethostname(), 'addresses': addrs,
                     'enet': [a for _, a in addrs if a.startswith('169.254.')],
                     'node': bool(bi.find_node()), 'ssh': bool(bi.find_ssh()),
@@ -362,6 +378,23 @@ class Pocket(object):
 
             def fn():
                 bi.do_install(ssh, node, ip, key, apps, language, reboot=True, log=log)
+            return self.start(action, fn)
+
+        if action == 'add-source':
+            repo = (body.get('repo') or '').strip()
+            channel = (body.get('channel') or 'releases').strip()
+            label = (body.get('label') or repo).strip()[:60]
+            if not bi.SOURCE_RE.match(repo):
+                raise Refused('The source must be a GitHub owner/repo, e.g. JustAnotherPU/ridetube.')
+            if not bi.CHANNEL_RE.match(channel):
+                raise Refused('The channel must be releases, tags, branch or branch:<name>.')
+
+            def fn():
+                r = bi.do_install_apps_source(node, ip, key, repo, label, log=log, channel=channel,
+                                              from_dir=store_staged(self.store))
+                if r == 'pending':
+                    self.set_chip('Store installed · restart the head unit', 'warn')
+                return bi.source_done_message(r, label)
             return self.start(action, fn)
         raise Refused('Unknown action: %r' % (action,))      # not reached
 

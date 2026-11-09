@@ -196,6 +196,58 @@ class Guards(unittest.TestCase):
             self.assertEqual(st, 400)
             self.assertEqual(car.requests, [])
 
+    def test_add_source_needs_the_key_and_a_real_repo(self):
+        with Box() as box, FakeCar(vin=VIN) as car:
+            st, r = box.run('add-source', repo='JustAnotherPU/ridetube')
+            self.assertEqual(st, 400)
+            self.assertIn('SSH key', r['error'])
+            st, s = box.call('/api/state')
+            self.assertEqual([x['id'] for x in s['sources']], ['ridetube', 'idrive-apps', 'car-apps'])
+            self.assertEqual([x['builtin'] for x in s['sources']], [False, True, True])
+            self.assertEqual(car.requests, [])
+
+    @unittest.skipIf(os.name == 'nt', 'the fake ssh is a shell script')
+    def test_add_source_runs_the_installer_path(self):
+        import shutil as _sh
+        log_file = None
+        with Box() as box, FakeSsh():
+            key = os.path.join(box.dir, 'id_rsa')
+            with open(key, 'w') as f:
+                f.write('fake key\n')
+            log_file = os.path.join(box.dir, 'ssh.log')
+            os.environ['FAKE_SSH_LOG'] = log_file
+            try:
+                box.call('/api/car', {'key': key, 'ip': '127.0.0.1'})
+                st, r = box.run('add-source', repo='bad repo')
+                self.assertEqual(st, 400)
+                st, r = box.run('add-source', repo='JustAnotherPU/ridetube', channel='nightly')
+                self.assertEqual(st, 400)
+                if not _sh.which('node'):
+                    return                       # the box would refuse without Node, which is right
+                st, r = box.run('add-source', repo='JustAnotherPU/ridetube', label='RideTube')
+                self.assertEqual(st, 202, r)
+                s = box.wait()
+                self.assertTrue(s['last']['ok'], '\n'.join(box.log()[-10:]))
+                self.assertIn('Store', s['last']['message'])
+                st, r = box.run('add-source', repo=bi.CARAPPS_REPO, label='car-apps')
+                s = box.wait()
+                self.assertIn('built-in', s['last']['message'])
+                # a Store whose updater is not up yet (just installed): told to restart, not an error
+                os.environ['FAKE_SSH_SOURCE'] = 'waiting'
+                st, r = box.run('add-source', repo='someone/else', label='Someone')
+                s = box.wait()
+                self.assertTrue(s['last']['ok'], s['last'])
+                self.assertIn('Restart the head unit', s['last']['message'])
+                self.assertEqual(s['chip'], ['Store installed · restart the head unit', 'warn'])
+            finally:
+                os.environ.pop('FAKE_SSH_LOG', None)
+                os.environ.pop('FAKE_SSH_SOURCE', None)
+            with open(log_file) as f:
+                sent = [l for l in f.read().splitlines() if l.startswith('add-source ')]
+        self.assertEqual(len(sent), 2, sent)          # RideTube, then the one that waited; car-apps is built in
+        self.assertTrue(sent[0].startswith('add-source JustAnotherPU/ridetube releases'), sent)
+        self.assertTrue(sent[1].startswith('add-source someone/else releases'), sent)
+
     def test_store_package_staged_on_the_box_is_used_offline(self):
         with Box() as box:
             self.assertFalse(box.call('/api/state')[1]['box']['store_staged'])

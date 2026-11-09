@@ -171,8 +171,14 @@ token) or with `node tools/mgu-store/mgu-install.js token --identity <key>`.
 The installer's **Bimmhacks Apps** tab installs an extra source the same way. Set the source to your
 repo (default: `waliworld/Bimmhacks`) and either:
 
-- **online:** click *Make our apps available* — it makes sure the Store is on the car, then your
-  source installs from the car screen; or
+- **online:** click *Make our apps available* — it makes sure the Store is on the car and **adds your
+  repo to the Store's sources for you** (no typing on the car screen; the installer asks the Store's
+  updater, the same request the Store's own *Add source* button sends). Your apps then install from
+  **Apps → Store**. Your repo needs a published **Release** with packaged apps (section 5) — or a
+  catalog, or an `mgu-repo.json` at its root — before the Store has anything to list; until then the
+  source is there but empty. If the installer says the Store's updater is not running yet, restart the
+  head unit and press the button again (a Store installed a minute ago starts its updater with the
+  head unit); or
 - **offline:** set a **Stage to** USB folder and the installer downloads your apps onto it, to install
   from **Apps → Store → USB**.
 

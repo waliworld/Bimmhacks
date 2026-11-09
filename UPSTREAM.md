@@ -70,6 +70,13 @@ This project bundles three upstream repositories, each copied unchanged except w
   guards — a refused flash must send the car nothing (`test_guards.py`) —, the root-access *enable* path end
   to end through the real tool and through the installer (`test_root_enable.py`), and the capture analyser
   on synthetic pcap/pcapng files (`test_pid_capture.py`).
+- `installer/unit_add_source.js` is an original script the installer sends to the head unit over ssh
+  (`node -`, the unit's own Node 8): it asks the Store's updater to add a GitHub repo as a Store source
+  with the `source-add` request every Store client uses (mgu-store `native/mgu-updater/README.md`, "The
+  socket"), with the secret the updater leaves for the Store. It is how RideTube and a repo of your own
+  get into the Store. `installer/tests/test_store_updater.py` runs it against the **real** mgu-updater
+  from a checkout of mgu-store pinned in `installer/tests/MGU_STORE_COMMIT` (`updater_harness.js` starts
+  it on a throw-away layout; nothing is vendored or shipped).
 - `installer/pocket_server.py` + `installer/pocket/` is **Bimmhacks Pocket**: the same installer
   functions behind a small HTTP/JSON server and a phone-sized page, for a box (a Raspberry Pi) on
   the ENET cable; `setup-box.sh` turns a Pi into that box. It can stage the Store package on the box

@@ -64,6 +64,9 @@
   details[open] summary::before { content: "− "; }
   .line { font-size: 14px; margin: 6px 0; }
   .line a { color: var(--accent); text-decoration: none; font-weight: 600; }
+  .line .note { color: var(--muted); }
+  p.hint { font-size: 13px; margin: 8px 0 0; }
+  #sources > div { padding: 8px 0 4px; border-top: 1px solid var(--line); }
   .mono { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 13px; word-break: break-all; }
   #log { font: 12px/1.45 ui-monospace, Menlo, Consolas, monospace; white-space: pre-wrap; word-break: break-word; max-height: 42vh;
          overflow: auto; margin: 6px 0 0; padding: 8px 0 0; border-top: 1px solid var(--line); min-height: 120px; }
@@ -154,6 +157,17 @@
   </section>
 
   <section class="card">
+    <div class="kicker">More sources for the Store</div>
+    <h2>RideTube, cluster maps, iDrive 8 apps, yours</h2>
+    <p>Everything here installs from <b>Apps › Store</b> on the car once the source is in the Store. Two of them are built in; the others are added here.</p>
+    <div id="sources"></div>
+    <label class="f" for="our_repo">Your own apps · GitHub owner/repo (its releases)</label>
+    <input id="our_repo" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="owner/repo">
+    <div class="btns"><button data-run="add-source" data-repo-from="#our_repo" data-label="Your apps" class="wide">Add your repo to the car's Store</button></div>
+    <p class="hint">The Store lists nothing from a repo until it has a published Release with packaged apps (docs/MAKE-YOUR-OWN-APP.md). If it says the Store's updater is not running yet, restart the head unit and press again.</p>
+  </section>
+
+  <section class="card">
     <div class="kicker">Step 3 · optional</div>
     <h2>Apps from this box</h2>
     <p>Installs the recommended set of MGU custom apps straight from the box (it builds them with the SDK read from your own car - slow on a small box). The Store above does the same from the car screen.</p>
@@ -192,6 +206,7 @@
     'root-disable': 'Disable root SSH on the car again?',
     'store-install': 'Install the MGU App Store on the car?\n\nAfterwards the car needs internet to browse the Store.',
     'stage-store': 'Download the Store package (and Doom\'s game data) onto this box now?\n\nThe box needs internet for this - join it to a Wi-Fi with internet or plug its Ethernet into your router first.',
+    'add-source': 'Add %s to the car\'s Store?\n\nInstalls the Store first if it is missing. The apps then install from Apps > Store on the car (the car needs internet to read the source).',
     'install-apps': 'Install the recommended apps on the car from this box?\n\nEverything changed is backed up first; the head unit may reboot at the end.',
     'restore': 'Remove ALL custom apps and put every changed file back to stock?'
   };
@@ -242,6 +257,28 @@
     fill('#arch', s.arches, c.arch);
     fill('#language', s.languages, c.language);
     $('#root_ip_override').checked = !!c.root_ip_override;
+    if (document.activeElement !== $('#our_repo')) { $('#our_repo').value = c.our_repo || ''; }
+    if (!$('#sources').childNodes.length) {
+      s.sources.forEach(function (src) {
+        var d = document.createElement('div');
+        d.innerHTML = '<div class="line"><b></b> <span class="note"></span></div>';
+        d.querySelector('b').textContent = src.label;
+        d.querySelector('.note').textContent = '· ' + src.note;
+        if (src.builtin) {
+          var t = document.createElement('div'); t.className = 'line'; t.style.color = 'var(--good)';
+          t.textContent = 'Built-in source: already in the Store once the Store is installed.';
+          d.appendChild(t);
+        } else {
+          var w = document.createElement('div'); w.className = 'btns';
+          var b = document.createElement('button'); b.className = 'wide';
+          b.dataset.run = 'add-source'; b.dataset.repo = src.repo; b.dataset.channel = src.channel; b.dataset.label = src.label.split(' ·')[0];
+          b.textContent = 'Add ' + b.dataset.label + ' to the car\'s Store';
+          b.addEventListener('click', function () { run('add-source', b); });
+          w.appendChild(b); d.appendChild(w);
+        }
+        $('#sources').appendChild(d);
+      });
+    }
     var k = $('#keyline');
     if (c.key_ok) {
       k.innerHTML = 'SSH key saved on the box for this car · <a href="/api/download?key=1&pin=' + encodeURIComponent(pin) + '">Download key bundle</a>';
@@ -296,29 +333,37 @@
   function carFields() {
     return { vin: $('#vin').value.trim().toUpperCase(), arch: $('#arch').value, ip: $('#ip').value.trim(),
              gateway: $('#gateway').value.trim() || 'auto', key: $('#key').value.trim(), language: $('#language').value,
-             root_ip_override: $('#root_ip_override').checked };
+             root_ip_override: $('#root_ip_override').checked, our_repo: $('#our_repo').value.trim() };
   }
 
   function saveCar() {
     api('/api/car', { method: 'POST', body: carFields() }).then(function (r) { if (!r.ok) { toast(r.error, 'err'); } else { poll(); } });
   }
-  ['vin', 'arch', 'ip', 'gateway', 'key', 'language', 'root_ip_override'].forEach(function (f) { $('#' + f).addEventListener('change', saveCar); });
+  ['vin', 'arch', 'ip', 'gateway', 'key', 'language', 'root_ip_override', 'our_repo'].forEach(function (f) { $('#' + f).addEventListener('change', saveCar); });
   $('#backup').addEventListener('change', function () { if (state) { render(state); } });
 
-  function run(action) {
+  function run(action, btn) {
     var body = { action: action, car: carFields() };
+    var what = '';
     if (NEEDS_BACKUP[action]) {
       if (!$('#backup').checked) { toast('Tick the backup confirmation first.', 'err'); return; }
       body.confirm_backup = true;
     }
     if (action === 'store-install') { body.no_renderer = $('#no_renderer').checked; body.no_uplink = $('#no_uplink').checked; }
-    if (CONFIRM[action] && !confirm(CONFIRM[action])) { return; }
+    if (action === 'add-source') {
+      body.repo = btn.dataset.repo || (btn.dataset.repoFrom ? $(btn.dataset.repoFrom).value.trim() : '');
+      body.channel = btn.dataset.channel || 'releases';
+      body.label = btn.dataset.label || body.repo;
+      if (!body.repo) { toast('Enter the source as owner/repo first.', 'err'); return; }
+      what = body.label + ' (' + body.repo + ')';
+    }
+    if (CONFIRM[action] && !confirm(CONFIRM[action].replace('%s', what))) { return; }
     api('/api/run', { method: 'POST', body: body }).then(function (r) {
       if (!r.ok) { toast(r.error || ('Refused (' + r.status + ')'), 'err'); }
       poll();
     });
   }
-  document.querySelectorAll('[data-run]').forEach(function (b) { b.addEventListener('click', function () { run(b.dataset.run); }); });
+  document.querySelectorAll('[data-run]').forEach(function (b) { b.addEventListener('click', function () { run(b.dataset.run, b); }); });
   $('#clear').addEventListener('click', function () { $('#log').innerHTML = ''; });
 
   poll();

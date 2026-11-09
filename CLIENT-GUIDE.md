@@ -84,15 +84,22 @@ afterwards (**Apps → Store**). The car needs internet for this (see above).
 1. Make sure the car has internet, then click **Install the App Store**.
 2. When it finishes, restart the head unit (car **Settings**, or power-cycle) to see the Store tile.
 
-**RideTube (YouTube)** sits next to it: click **Make it available**. RideTube is an unofficial
-YouTube client for the MGU (GPL-3, by JustAnotherPU): it plays on the car over the car's internet,
-shows the picture **only while parked**, and drops to a sound-only podcast view while driving. It is
-not affiliated with YouTube/Google. Install the App Store first; iDrive 7.
+**RideTube (YouTube)** sits next to it: click **Make it available**. The installer makes sure the
+Store is on the car and then **adds RideTube to the Store's sources for you**, so it is a normal
+download under **Apps → Store** on the car. RideTube is an unofficial YouTube client for the MGU
+(GPL-3, by JustAnotherPU): it plays on the car over the car's internet, shows the picture **only
+while parked**, and drops to a sound-only podcast view while driving. It is not affiliated with
+YouTube/Google. iDrive 7.
+
+> **First time on a car?** A Store that was installed a minute ago only starts its updater with the
+> head unit. If the installer says *the Store's updater is not running yet*, restart the head unit
+> (car **Settings**, or power-cycle), wait a minute, and click the button again.
 
 ### More apps
 
-Two more Store sources, each with its own card. Both install through the on-car Store — install the
-**App Store** first; both are built-in Store sources, so they appear there automatically.
+Two more Store sources, each with its own card. Both are **built-in sources of the Store**: the
+Store lists them as soon as it is installed (the buttons only make sure the Store is on the car, or
+stage the apps to a USB stick for a car without internet).
 
 - **Cluster & HUD maps (idrive-apps)** — Robert Nisipeanu's Waze / CarPlay map on the instrument
   cluster and HUD. Online car: click **Make it available**, then on the car open **Apps → Store**
