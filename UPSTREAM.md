@@ -77,6 +77,9 @@ This project bundles three upstream repositories, each copied unchanged except w
   get into the Store. `installer/tests/test_store_updater.py` runs it against the **real** mgu-updater
   from a checkout of mgu-store pinned in `installer/tests/MGU_STORE_COMMIT` (`updater_harness.js` starts
   it on a throw-away layout; nothing is vendored or shipped).
+- `installer/screenshots/` holds screenshots of the window (a step-by-step session and an overview), made by
+  `installer/tests/desktop_shots.py`, which drives the real window under Xvfb against the test suite's fake
+  car and the real Store updater (developer tool; not shipped).
 - `installer/pocket_server.py` + `installer/pocket/` is **Bimmhacks Pocket**: the same installer
   functions behind a small HTTP/JSON server and a phone-sized page, for a box (a Raspberry Pi) on
   the ENET cable; `setup-box.sh` turns a Pi into that box. It can stage the Store package on the box

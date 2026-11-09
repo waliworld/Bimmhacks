@@ -42,6 +42,28 @@ snapshot and the App Store from an iPhone or Android, with the same safety gates
 
 ![Installer window](installer/screenshot.png)
 
+### A tour of the window
+
+<table>
+<tr>
+<td width="50%"><img src="installer/screenshots/02-detect-vin.png" alt="Detect VIN"><br><sub><b>Root access.</b> The car is found by broadcast; its VIN fills the field and the root tool's output streams into the activity log.</sub></td>
+<td width="50%"><img src="installer/screenshots/04-flash-confirmation.png" alt="Flash confirmation"><br><sub><b>The flash gate.</b> A coding snapshot is saved first; flashing asks again and says what it wipes. Without the backup tick it refuses (<a href="installer/screenshots/05-flash-needs-backup.png">screenshot</a>).</sub></td>
+</tr>
+<tr>
+<td><img src="installer/screenshots/07-apps-connected.png" alt="Apps"><br><sub><b>Apps.</b> Pick the apps and language; the chip shows the car is reachable as root.</sub></td>
+<td><img src="installer/screenshots/10-ridetube-added.png" alt="RideTube added to the Store"><br><sub><b>App Store.</b> Install the Store, and add RideTube to it in one click: it is then a normal download on the car (<a href="installer/screenshots/09-ridetube-confirm.png">confirmation</a>).</sub></td>
+</tr>
+<tr>
+<td><img src="installer/screenshots/11-more-apps.png" alt="More apps"><br><sub><b>More apps.</b> Cluster &amp; HUD maps, and IterioDev's iDrive 8 apps, both built-in Store sources.</sub></td>
+<td><img src="installer/screenshots/13-analyse-capture.png" alt="Analyse a capture"><br><sub><b>Bimmhacks apps.</b> Your own source, and the capture analyser: which identifiers a logger read from your car.</sub></td>
+</tr>
+</table>
+
+All fourteen steps, and a one-page [overview](installer/screenshots/00-overview.png), are in
+`installer/screenshots/`. They were taken on Linux against the test suite's fake car (no real car), so
+Windows shows the same window in Segoe UI with its native dialogs. Regenerate them with
+`installer/tests/desktop_shots.py`.
+
 ## Backing up the coding
 
 Before any flash, **Back up coding (snapshot)** reads the car over ENET and saves which CAFD coding

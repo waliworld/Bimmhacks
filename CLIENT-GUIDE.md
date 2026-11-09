@@ -48,7 +48,7 @@ to the **Apps** section and pick the key with *Browse* (the IP address is filled
    itself.
 2. **Restorable backup (BimmerCode or E-Sys).** Also save the coding with BimmerCode or E-Sys —
    this is the only thing that can actually re-code the car. Then tick **"I have saved a restorable
-   coding backup"**. The **Flash** button stays locked until you do.
+   coding backup"**. **Flash** refuses, with a reminder, until you do.
 
 Then:
 

@@ -31,7 +31,7 @@ it. Stage C (App Store) needs internet at the car (or a prepared USB stick).
 """
 import argparse, io, json, os, queue, re, shutil, stat, subprocess, sys, tarfile, tempfile, threading
 
-VERSION = '1.8.0'
+VERSION = '1.8.1'
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 ROOT = os.environ.get('BIMMHACKS_APPS_ROOT') or os.path.join(REPO, 'idrive7-apps')
@@ -1327,7 +1327,7 @@ def run_gui():
     source_card(r3, 'Popular community source', 'RideTube  ·  unofficial YouTube client',
                 'Plays on the car over the car\'s internet; the picture shows only while parked and drops to a '
                 'podcast view (sound only) while driving. GPL-3, by JustAnotherPU; not affiliated with YouTube '
-                'or Google. iDrive 7. Install the Store first.',
+                'or Google. iDrive 7. Installs the Store first if it is missing.',
                 RIDETUBE_REPO, 'RideTube (YouTube, unofficial)', 'stage_rt',
                 'RideTube is a source of the car\'s Store now - on the car open Apps > Store to install it.',
                 'Make the RideTube YouTube client available on the car at %s?\n\nUnofficial. Video is parked-only. '
@@ -1358,19 +1358,20 @@ def run_gui():
 
     # ======================================================= 5. Bimmhacks apps (ours)
     p5 = section('Bimmhacks apps')
-    c5 = card(p5, pady=(10, 10))
+    l5, r5 = two_up(p5)
+    c5 = card(l5, pady=(0, 10), padx=(22, 6))
     kicker(c5, 'In-house  ·  developed by us')
     title(c5, 'Bimmhacks apps')
     para(c5, 'Bimmhacks Tuner and the Bimmhacks Hello starter already ship in the Apps section. Publish your own '
              'apps to the GitHub repo below and they install through the on-car Store like every other source: the '
              'button adds the repo to the Store for you. The Store lists apps once the repo has a published Release '
-             '(the guide walks through building and publishing one).')
+             '(the guide walks through building and publishing one).', wrap=400)
     our_repo = tk.StringVar(value=cfg.get('our_repo', BIMMHACKS_APPS_REPO))
     stage_our = tk.StringVar(value=cfg.get('stage_our', ''))
     gg = tk.Frame(c5, bg=PANEL)
     gg.pack(fill='x', pady=(6, 0))
-    field(gg, 'Source repo (owner/repo)', our_repo, width=34, r=0, c=0)
-    field(gg, 'Stage to USB / folder (optional)', stage_our, width=34, r=1, c=0)
+    field(gg, 'Source repo', our_repo, width=18, r=0, c=0)
+    field(gg, 'Stage to USB', stage_our, width=18, r=1, c=0)
     bc = ttk.Button(gg, text='Choose', command=lambda: pick_stage(stage_our))
     bc.grid(row=1, column=2, sticky='w')
     buttons.append(bc)
@@ -1392,18 +1393,19 @@ def run_gui():
             r = do_install_apps_source(need_node(), ip, key, repo, 'Bimmhacks Apps', stage_dir=stage_our.get().strip() or None, log=log)
             return Done(source_done_message(r, 'Bimmhacks Apps'))
         start(w, 'Bimmhacks apps are a source of the car\'s Store now - install them from Apps > Store on the car.')
-    ob = row(c5)
+    ob = row(c5, pady=(8, 2))
     button(ob, 'Make our apps available', on_our, style='Accent.TButton')
-    button(ob, 'How to make an app', lambda: _open_path(APP_GUIDE))
-    button(ob, 'Open our repo', lambda: _open_url('https://github.com/' + (our_repo.get().strip() or BIMMHACKS_APPS_REPO)))
+    ob2 = row(c5, pady=(0, 12))
+    button(ob2, 'How to make an app', lambda: _open_path(APP_GUIDE))
+    button(ob2, 'Open our repo', lambda: _open_url('https://github.com/' + (our_repo.get().strip() or BIMMHACKS_APPS_REPO)))
 
-    c5b = card(p5, pady=(0, 10))
+    c5b = card(r5, pady=(0, 10), padx=(6, 22))
     kicker(c5b, 'Tuner  ·  PIDs from a capture')
-    title(c5b, 'Which identifiers does a logging tool read from your car?')
+    title(c5b, 'Which identifiers does a logger read?')
     para(c5b, 'Record the ENET link with Wireshark while a logger (MHD, BM3, ISTA ...) runs on your own car, then '
               'pick the .pcap here. You get a report of every identifier it asked the car for, and a '
               'custom_pids.json for Bimmhacks Tuner that logs the same ones raw. The root tool\'s own session '
-              'logs work too.')
+              'logs work too. The report appears in the activity log below.', wrap=400)
 
     def on_capture():
         p = filedialog.askopenfilename(title='A Wireshark capture of the ENET link, or a root-tool session log',
