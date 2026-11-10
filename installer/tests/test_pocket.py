@@ -122,7 +122,6 @@ class PageAndFields(unittest.TestCase):
             self.assertEqual(s['car']['arch'], 'id7')
             self.assertEqual(s['car']['ip'], bi.DEFAULT_IP)
             self.assertEqual(s['arches'], list(bi.ARCHES))
-            self.assertIn('en', s['languages'])
             for p in ('/manifest.webmanifest', '/icon.svg'):
                 self.assertEqual(box.call(p, raw=True)[0], 200, p)
             self.assertEqual(box.call('/nope', raw=True)[0], 404)
@@ -137,7 +136,7 @@ class PageAndFields(unittest.TestCase):
             # survives a reload of the state (it is the installer's own config file)
             self.assertEqual(box.call('/api/state')[1]['car']['ip'], '192.168.4.9')
             for bad in ({'vin': 'SHORT'}, {'vin': 'WBA1234567890123I'}, {'arch': 'id9'}, {'ip': '1.2.3.4;reboot'},
-                        {'gateway': 'x y'}, {'key': '/no/such/key'}, {'language': 'xx'}):
+                        {'gateway': 'x y'}, {'key': '/no/such/key'}):
                 st, r = box.call('/api/car', bad)
                 self.assertEqual(st, 400, bad)
                 self.assertIn('error', r)

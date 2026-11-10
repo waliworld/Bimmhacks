@@ -85,16 +85,22 @@ class CodingSnapshot(unittest.TestCase):
         self.assertEqual(snap['mgu_ip'][0], '169.254.36.47')
         self.assertIn('480A01', snap['dtcs'])
         self.assertIn('B7F8E5', snap['dtcs'])
-        # both files exist, the JSON round-trips, the text names every CAFD to restore
+        # the fake car hands over NCD, so the backup captured real coding and wrote .ncd files
+        self.assertTrue(snap['ncd_captured'])
+        self.assertEqual([b['cafd'] for b in snap['ncd_blocks']], ['000000AB', '000000AC'])
+        self.assertTrue(all(b['ncd_len'] > 0 for b in snap['ncd_blocks']))
+        # both files exist, the JSON round-trips, the text names every CAFD, and the .ncd folder has them
         base = path[:-4]
         with open(base + '.json') as f:
             data = json.load(f)
         self.assertEqual(data['vin'], VIN)
+        self.assertEqual(sorted(data['ncd_files']), sorted(os.listdir(base + '.ncd')))
+        self.assertTrue(all(n.endswith('.ncd') for n in data['ncd_files']))
         with open(base + '.txt') as f:
             text = f.read()
         self.assertIn('CAFD_000000AB', text)
         self.assertIn('CAFD_000000AC', text)
-        self.assertIn('NOT a restorable backup', text)
+        self.assertIn('DID capture the coding data', text)
 
     def test_snapshot_is_read_only_on_the_wire(self):
         with FakeCar(vin=VIN) as car:

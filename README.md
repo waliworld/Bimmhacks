@@ -1,75 +1,65 @@
-# Bimmhacks: MGU Flash & App Studio (iDrive 7 & 8)
+# Bimmhacks: root access, coding backup & the on-car App Store (iDrive 7 & 8)
 
-A clean one-window tool for BMW **MGU head units (iDrive 7)** that a client runs on their own PC. It
-takes a car from stock to installed apps, and bundles the tools for each stage. **Flashing app and
-installer developed by Mr. Wali**; the apps, root tool and Store are open source (see the Credits tab).
+A clean one-window tool for BMW **MGU head units (iDrive 7 & 8)** that a client runs on their own PC.
+It does three things — the three that work reliably on a real car — and bundles the tools for each.
+**Flashing app and installer developed by Mr. Wali**; the root tool and Store are open source (see the
+Credits tab). Apps are **not** built on the PC: once the on-car Store is installed, every app installs
+from the car's own screen.
 
 - **Root access** — back up the coding, then enable root SSH over an ENET cable with the bundled
   [idrive7-8-ssh-root](https://github.com/cauliflowermossgrape/idrive7-8-ssh-root) tool (one flash
-  per car; it writes the car's SSH key the rest of the flow uses).
-- **Apps** — the [MGU custom apps](https://github.com/cauliflowermossgrape/idrive7-apps), built per
-  car: it reads BMW's SDK off that car (never shipped — BMW's code), builds the chosen apps and
-  language, installs them with a full backup, then deletes the SDK and build output.
-- **App Store** — install the on-car [mgu-store](https://github.com/robertnisipeanu/mgu-store) so the
-  client browses, installs and updates apps from the car screen afterwards.
-- **idrive-apps** — make Robert Nisipeanu's
-  [idrive-apps](https://github.com/robertnisipeanu/idrive-apps) (cluster / HUD maps) available
-  through the Store, online or staged to USB. It is a built-in Store source: the Store lists it as
-  soon as it is installed. **RideTube** and your own repo are different: the installer **adds them
-  to the Store's sources for you** (it asks the Store's updater over ssh), so they are a normal
-  download under *Apps → Store* on the car.
-- **car-apps** — [IterioDev's car-apps](https://github.com/IterioDev/car-apps), iDrive 8 focused
-  (PolyForm Strict licence), through the Store the same way.
-- **Bimmhacks Apps** — apps developed in-house, from your own GitHub source. A working starter app,
-  **Bimmhacks Hello**, ships in the Apps tab; copy it to build your own. Full walkthrough:
-  [docs/MAKE-YOUR-OWN-APP.md](docs/MAKE-YOUR-OWN-APP.md). The same tab has **Analyse a capture**:
-  give it a Wireshark capture of the ENET link recorded while a logger (MHD, BM3, ISTA …) ran on
-  *your own* car and it lists every identifier the logger read, and writes a `custom_pids.json` for
-  the Tuner that logs the same ones ([installer/pid_capture.py](installer/pid_capture.py)).
-- **Bimmhacks Tuner** (in the Apps tab, marked experimental) — our own app: live gauges (boost, load,
-  timing, lambda, knock), a CSV datalogger with switchable **log packs** (tuning, engine, per-cylinder, the
-  eight MHD-capture identifiers logged raw, and your own `custom_pids.json`), the engine unit's fault codes
-  and, for a car that *already* runs a multi-map tune, map switching. **It never flashes or writes a tune**, and map switching ships
-  off. Not yet tested on a car. Details: [idrive7-apps/apps/bimmhacks_tuner/README.md](idrive7-apps/apps/bimmhacks_tuner/README.md).
+  per car; it writes the car's SSH key the rest of the flow uses). A flash **wipes the coding**, so the
+  tool refuses to flash until you confirm a coding backup, and this version can take one for you.
+- **Coding backup & restore (experimental)** — **Back up coding** reads the unit over ENET and saves
+  the CAFD coding versions, VIN, faults and, where the unit hands it over, the coding data (NCD) itself
+  as E-Sys-compatible `.ncd` files. The **restore** card can write that captured coding back after a
+  flash and read it back to verify — gated, with Verify and Dry-run modes that never write. Keep
+  BimmerCode / E-Sys / Autel ready: a wrong coding write can leave the HMI partly-coded.
+- **App Store** — install the on-car [mgu-store](https://github.com/robertnisipeanu/mgu-store) (its
+  renderer and internet uplink), restart the head unit so it comes up, and add **RideTube** (and your
+  own GitHub repo) to the Store's sources in one click. From there the client browses, installs and
+  updates apps from the car screen — including Robert Nisipeanu's
+  [idrive-apps](https://github.com/robertnisipeanu/idrive-apps) and
+  [IterioDev's car-apps](https://github.com/IterioDev/car-apps), built-in Store sources.
 - **Credits** — the people behind every part.
 
-Plus **coding snapshot**, **Status** and **Restore to stock**.
-
-**No laptop? Bimmhacks Pocket** is the phone version: a small box (a Raspberry Pi) on the ENET cable
-runs the same installer and serves a lightweight page over its own Wi-Fi — root access, the coding
-snapshot and the App Store from an iPhone or Android, with the same safety gates. Build and use:
-[docs/POCKET.md](docs/POCKET.md) (`installer/pocket_server.py`, `installer/pocket/setup-box.sh`).
+**No laptop? Bimmhacks Pocket** is the phone version, released as its **own** package: a small box (a
+Raspberry Pi) on the ENET cable runs the same engine and serves a lightweight page over its own Wi-Fi —
+root access, the coding backup/restore and the App Store from an iPhone or Android, with the same safety
+gates. Build and use: [docs/POCKET.md](docs/POCKET.md) (`installer/pocket_server.py`,
+`installer/pocket/setup-box.sh`).
 
 ![Installer window](installer/screenshot.png)
 
 ### A tour of the window
 
-<table>
-<tr>
-<td width="50%"><img src="installer/screenshots/02-detect-vin.png" alt="Detect VIN"><br><sub><b>Root access.</b> The car is found by broadcast; its VIN fills the field and the root tool's output streams into the activity log.</sub></td>
-<td width="50%"><img src="installer/screenshots/04-flash-confirmation.png" alt="Flash confirmation"><br><sub><b>The flash gate.</b> A coding snapshot is saved first; flashing asks again and says what it wipes. Without the backup tick it refuses (<a href="installer/screenshots/05-flash-needs-backup.png">screenshot</a>).</sub></td>
-</tr>
-<tr>
-<td><img src="installer/screenshots/07-apps-connected.png" alt="Apps"><br><sub><b>Apps.</b> Pick the apps and language; the chip shows the car is reachable as root.</sub></td>
-<td><img src="installer/screenshots/10-ridetube-added.png" alt="RideTube added to the Store"><br><sub><b>App Store.</b> Install the Store (renderer, internet uplink and a restart, each explained), and add RideTube to it in one click: it is then a normal download on the car (<a href="installer/screenshots/09-ridetube-confirm.png">confirmation</a>). The Store only starts after a restart, so the installer restarts the head unit for you and waits (<a href="installer/screenshots/10b-restart-confirm.png">confirmation</a>, <a href="installer/screenshots/10c-head-unit-restarted.png">result</a>).</sub></td>
-</tr>
-<tr>
-<td><img src="installer/screenshots/11-more-apps.png" alt="More apps"><br><sub><b>More apps.</b> Cluster &amp; HUD maps, and IterioDev's iDrive 8 apps, both built-in Store sources.</sub></td>
-<td><img src="installer/screenshots/13-analyse-capture.png" alt="Analyse a capture"><br><sub><b>Bimmhacks apps.</b> Your own source, and the capture analyser: which identifiers a logger read from your car.</sub></td>
-</tr>
-</table>
+Three tabs, worked left to right — nothing else:
 
-All seventeen steps, and a one-page [overview](installer/screenshots/00-overview.png), are in
-`installer/screenshots/`. They were taken on Linux against the test suite's fake car (no real car), so
-Windows shows the same window in Segoe UI with its native dialogs. Regenerate them with
-`installer/tests/desktop_shots.py`.
+- **Root access.** Detect the VIN by broadcast, **back up the coding** over ENET, then **Flash + enable
+  SSH** (gated: it refuses until you confirm you have a coding backup, and says what the flash wipes).
+  The card on the right is the experimental **coding restore** — Verify / Dry run / Restore, which can
+  write the captured coding (NCD) back after a flash and read it back to check.
+- **App Store.** Install the on-car MGU **App Store** (its renderer and internet uplink, each explained),
+  and the installer restarts the head unit for you so the Store comes up. Add **RideTube** (and your own
+  repo) to it in one click — from there every app installs on the car, from the Store.
+- **Credits.**
+
+The hero shot was taken on Linux against the test suite's fake car (no real car), so Windows shows the
+same window in Segoe UI with its native dialogs. Regenerate it with `installer/tests/desktop_shots.py`
+(needs `python3-tk`, Xvfb and ImageMagick).
 
 ## Backing up the coding
 
-Before any flash, **Back up coding (snapshot)** reads the car over ENET and saves which CAFD coding
-versions, VIN, IP and faults are on it (into `coding-backups/`). That records *what to restore*. It
-is **not** a restorable backup on its own — the installer requires you to also confirm a
-BimmerCode / E-Sys backup before it will flash.
+Before any flash, **Back up coding** reads the car over ENET into `coding-backups/`: the CAFD coding
+versions, VIN, IP and faults (*what to restore*) and, where the unit hands it over, the coding data
+(NCD) itself as E-Sys-compatible `.ncd` files (*the coding to restore*).
+
+The **restore** is experimental and safe-by-construction: it only ever writes back the exact NCD it
+read, only to the coding identifiers it read, gates on a CAFD-versions-and-VIN match, requires a typed
+confirmation, and reads every block back to verify. **Verify** and **Dry run** never write. Even so, a
+coding write can leave the HMI partly-coded, so keep BimmerCode / E-Sys / Autel ready as the fallback
+(the `.ncd` files load straight into E-Sys). The flash still refuses until you confirm you have a
+backup — from this tool, BimmerCode, E-Sys or Autel.
 
 ## What's in this repository
 
@@ -78,38 +68,46 @@ BimmerCode / E-Sys backup before it will flash.
 | `Install Bimmhacks Apps.cmd` | **Windows:** double-click. Installs Python + Node.js (winget) if needed, offers to elevate, opens the window |
 | `Install Bimmhacks Apps.command` / `install.sh` | macOS / Linux launcher |
 | `installer/bimmhacks_installer.py` | the installer (window + command line), Python standard library + `cryptography` for root access |
-| `installer/coding_backup.py` | reads the coding snapshot (CAFD versions / VIN / faults) over ENET |
+| `installer/coding_backup.py` | the coding engine: snapshot + NCD backup / verify / restore over ENET |
 | `installer/windows/bootstrap.ps1` | the Windows prerequisite / elevation check behind the `.cmd` |
-| `installer/make_client_package.py` | packs everything into one zip for clients |
-| `idrive7-apps/` | the custom apps (upstream copy — see [UPSTREAM.md](UPSTREAM.md)) |
+| `installer/make_client_package.py` | builds the two client zips (PC installer + Pocket box) |
+| `installer/pocket_server.py`, `installer/pocket/` | Bimmhacks Pocket: the box server + phone page (shipped in the Pocket zip) |
 | `tools/idrive7-8-ssh-root/` | the root-access tool (public domain) |
 | `tools/mgu-store/` | the on-car App Store installer (`mgu-install.js`, GPL-3.0) |
-| [CLIENT-GUIDE.md](CLIENT-GUIDE.md) | step-by-step guide for clients (goes into the zip) |
+| `idrive7-apps/` | app sources & tools (not shipped in either zip — apps install from the on-car Store) |
+| [CLIENT-GUIDE.md](CLIENT-GUIDE.md) | step-by-step guide for clients (goes into the PC zip) |
 
-## Making the package for clients
+## Making the packages for clients
+
+The PC installer and the Pocket box are **separate releases** — a change to one never holds up the other:
 
 ```sh
-python3 installer/make_client_package.py
-# -> dist/Bimmhacks-MGU-Installer-<version>.zip  (no BMW SDK, no built apps, no client keys)
+python3 installer/make_client_package.py          # both zips, into dist/
+python3 installer/make_client_package.py --pc      # only the PC installer
+python3 installer/make_client_package.py --pocket  # only the Pocket box
+# -> dist/Bimmhacks-MGU-Installer-<version>.zip   the desktop app (no Pocket code, no BMW SDK, no keys)
+# -> dist/Bimmhacks-Pocket-<version>.zip          the Raspberry Pi box (server + phone page + engine)
 ```
 
-GitHub Actions builds the same zip on every push (*Actions → Client installer package → artifact*),
-and checks the zip carries no BMW SDK, built apps or client SSH keys. Send the zip with
-[CLIENT-GUIDE.md](CLIENT-GUIDE.md); the client unzips it and double-clicks `Install Bimmhacks Apps.cmd`.
+GitHub Actions builds both zips on every push (*Actions → Client installer package → artifacts*), and
+checks that neither carries a BMW SDK or client SSH key and that the PC zip has no Pocket code. Send the
+PC zip with [CLIENT-GUIDE.md](CLIENT-GUIDE.md); the client unzips it and double-clicks
+`Install Bimmhacks Apps.cmd`. The Pocket zip goes onto the box — see [docs/POCKET.md](docs/POCKET.md).
 
 ## Command line
 
 ```sh
-python3 installer/bimmhacks_installer.py backup-coding --out coding-backups   # coding snapshot
+python3 installer/bimmhacks_installer.py backup-coding --out coding-backups        # snapshot + NCD backup
+python3 installer/bimmhacks_installer.py verify-coding --backup <backup.json>      # read-only: does the car match?
+python3 installer/bimmhacks_installer.py restore-coding --backup <backup.json> --dry-run   # show, write nothing
+python3 installer/bimmhacks_installer.py restore-coding --backup <backup.json> --confirm-restore  # EXPERIMENTAL write-back
 python3 installer/bimmhacks_installer.py root-flash --vin <VIN> --confirm-backup   # enable root SSH (ENET); refuses without the flag
-python3 installer/bimmhacks_installer.py install --key <id_rsa>     # build + install apps
-python3 installer/bimmhacks_installer.py store-install --key <id_rsa> --restart   # install the App Store, restart the head unit
-python3 installer/bimmhacks_installer.py restart-head-unit --key <id_rsa>   # restart it (the Store only starts after one)
-python3 installer/bimmhacks_installer.py install-idrive-apps --key <id_rsa>   # cluster/HUD maps
+python3 installer/bimmhacks_installer.py store-install --key <id_rsa> --restart    # install the App Store, restart the head unit
+python3 installer/bimmhacks_installer.py restart-head-unit --key <id_rsa>          # restart it (the Store only starts after one)
+python3 installer/bimmhacks_installer.py install-ridetube --key <id_rsa>           # add RideTube to the Store's sources
+python3 installer/bimmhacks_installer.py install-idrive-apps --key <id_rsa>        # add cluster/HUD maps as a Store source
 python3 installer/bimmhacks_installer.py install-our-apps --key <id_rsa> --repo owner/repo
-python3 installer/bimmhacks_installer.py status|restore --key <id_rsa>
-python3 installer/bimmhacks_installer.py apps                       # list apps + languages
-python3 installer/pid_capture.py drive.pcapng                       # identifiers a logger read (Wireshark capture)
+python3 installer/pid_capture.py drive.pcapng                                      # identifiers a logger read (Wireshark capture)
 ```
 
 ## Requirements on the client PC

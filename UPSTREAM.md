@@ -43,8 +43,8 @@ This project bundles three upstream repositories, each copied unchanged except w
 - **Repository:** https://github.com/robertnisipeanu/idrive-apps (GPL-3.0)
 - Not copied into this repo: it is a built-in **mgu-store** source and is installed through the
   on-car Store (online) or staged to USB with `mgu-install.js usb-repo github:robertnisipeanu/idrive-apps`
-  (offline). The installer's "idrive-apps" and "Bimmhacks Apps" tabs use that path, so nothing from
-  the repo needs to ship in the client package.
+  (offline). The installer points the on-car Store at it (built-in source, or `install-idrive-apps` /
+  `usb-repo`), so nothing from the repo needs to ship in the client package.
 
 ## 5. car-apps (IterioDev/car-apps) — not vendored
 
@@ -55,9 +55,13 @@ This project bundles three upstream repositories, each copied unchanged except w
 
 ## Bimmhacks additions (not upstream)
 
-- `installer/coding_backup.py` reads a diagnostic coding snapshot (CAFD versions / VIN / IP / faults)
-  over ENET by reusing the vendored `mgu7` package. It is a record of what to restore, not a
-  restorable coding backup.
+- `installer/coding_backup.py` is the coding engine: over ENET (reusing the vendored `mgu7` package) it
+  takes a snapshot (CAFD versions / VIN / IP / faults) and, where the unit hands it over, backs up the
+  coding data (NCD) as E-Sys-compatible `.ncd` files, then can **verify** and **restore** it. Restore is
+  experimental and safe-by-construction: it writes only the NCD it read, only to the identifiers it read,
+  gates on a CAFD-versions-and-VIN match, requires a typed confirmation and reads every block back.
+  Tests: `installer/tests/test_coding_restore.py` (round-trip, the gates, dry-run writes nothing, a
+  refused or non-sticking write is reported).
 - `idrive7-apps/apps/bimmhacks_hello/` is a small original example app (MIT, part of this project)
   that builds with the idrive7-apps kit; it is the starter for `docs/MAKE-YOUR-OWN-APP.md`.
 - `idrive7-apps/apps/bimmhacks_tuner/` is an original app (MIT, part of this project): gauges, CSV
@@ -81,9 +85,9 @@ This project bundles three upstream repositories, each copied unchanged except w
   get into the Store. `installer/tests/test_store_updater.py` runs it against the **real** mgu-updater
   from a checkout of mgu-store pinned in `installer/tests/MGU_STORE_COMMIT` (`updater_harness.js` starts
   it on a throw-away layout; nothing is vendored or shipped).
-- `installer/screenshots/` holds screenshots of the window (a step-by-step session and an overview), made by
-  `installer/tests/desktop_shots.py`, which drives the real window under Xvfb against the test suite's fake
-  car and the real Store updater (developer tool; not shipped).
+- `installer/screenshots/` holds screenshots of the window's three tabs (plus an overview), made by
+  `installer/tests/desktop_shots.py`, which opens the real window under Xvfb and captures each tab
+  (developer tool; not shipped).
 - `installer/pocket_server.py` + `installer/pocket/` is **Bimmhacks Pocket**: the same installer
   functions behind a small HTTP/JSON server and a phone-sized page, for a box (a Raspberry Pi) on
   the ENET cable; `setup-box.sh` turns a Pi into that box. It can stage the Store package on the box
@@ -114,8 +118,14 @@ cp /tmp/store/deploy/mgu-install.js /tmp/store/LICENSE /tmp/store/THIRD_PARTY_NO
    /tmp/store/deploy/sources.json tools/mgu-store/
 
 # then update the commit hashes above and bump VERSION in installer/bimmhacks_installer.py
-python3 installer/make_client_package.py
+python3 installer/make_client_package.py          # builds two zips: PC installer + Pocket box
 ```
 
+`make_client_package.py` builds **two independent zips** so the PC and Pocket releases are separate:
+`Bimmhacks-MGU-Installer-<version>.zip` (the desktop app, with no Pocket code) and
+`Bimmhacks-Pocket-<version>.zip` (the box: the Pocket server, its page and the engine it drives). Pass
+`--pc` or `--pocket` to build just one. Neither ships the `idrive7-apps` tree (apps install from the
+on-car Store), the tests, screenshots, or client keys.
+
 Not included (and never to be committed or shipped): BMW's `oap-sdk` and any built `.mgu`. They
-contain BMW's copyrighted code; the installer extracts the SDK from each client's own car.
+contain BMW's copyrighted code.

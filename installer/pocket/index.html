@@ -110,8 +110,6 @@
       <input id="gateway" autocomplete="off" placeholder="auto">
       <label class="f" for="key">SSH key file on the box (filled in by root access)</label>
       <input id="key" class="mono" autocomplete="off" placeholder="/…/data/enrollments/<VIN>/id_rsa">
-      <label class="f" for="language">App language</label>
-      <select id="language"></select>
       <label class="check"><input type="checkbox" id="root_ip_override"> Root access: use the IP address above instead of the address the car reports (only with a bridge or NAT between box and car)</label>
     </details>
   </section>
@@ -125,8 +123,8 @@
       <button data-run="backup-coding">Back up coding</button>
       <button data-run="root-status" class="wide">Check state (read-only)</button>
     </div>
-    <div class="notice">Flashing reprograms the head unit and <b>wipes its coding and BMW Digital Key pairings</b>. Take a coding snapshot above <i>and</i> a BimmerCode / E-Sys backup first; re-pair keys after.</div>
-    <label class="check"><input type="checkbox" id="backup"> I have saved a restorable coding backup (BimmerCode / E-Sys)</label>
+    <div class="notice">Flashing reprograms the head unit and <b>wipes its coding and BMW Digital Key pairings</b>. Back up the coding first (above), keep your Autel / E-Sys backup too; re-pair keys after.</div>
+    <label class="check"><input type="checkbox" id="backup"> I have a coding backup (this box, BimmerCode / E-Sys or Autel)</label>
     <div class="btns">
       <button id="flash" class="primary wide" disabled data-run="root-flash">Flash + enable SSH</button>
     </div>
@@ -136,6 +134,16 @@
         <button data-run="root-enable">Enable (repair, no flash)</button>
         <button data-run="root-fix-key" id="fixkey" disabled>Fix refusing key</button>
         <button data-run="root-disable" class="danger wide">Disable root SSH</button>
+      </div>
+    </details>
+    <details>
+      <summary>Coding restore (experimental)</summary>
+      <p class="hint">"Back up coding" saves the coding data (NCD) where the unit hands it over. This writes it back and reads it back to verify. <b>Experimental</b> - a wrong write can leave the HMI partly-coded; keep Autel / E-Sys ready. Verify and Dry run never write to the car.</p>
+      <label class="check"><input type="checkbox" id="confirm_restore"> I accept this is experimental and have Autel / E-Sys ready</label>
+      <div class="btns">
+        <button data-run="verify-coding">Verify coding</button>
+        <button data-run="restore-coding" data-dry="1">Dry run</button>
+        <button data-run="restore-coding" class="danger wide">Restore coding (experimental)</button>
       </div>
     </details>
   </section>
@@ -171,18 +179,7 @@
   </section>
 
   <section class="card">
-    <div class="kicker">Step 3 · optional</div>
-    <h2>Apps from this box</h2>
-    <p>Installs the recommended set of MGU custom apps straight from the box (it builds them with the SDK read from your own car - slow on a small box). The Store above does the same from the car screen.</p>
-    <div class="btns">
-      <button data-run="install-apps" class="primary">Install recommended apps</button>
-      <button data-run="status">Status</button>
-      <button data-run="restore" class="danger wide">Restore to stock</button>
-    </div>
-  </section>
-
-  <section class="card">
-    <div class="kicker">Coding snapshots on the box</div>
+    <div class="kicker">Coding backups on the box</div>
     <ul class="snaps" id="snaps"><li>None yet.</li></ul>
   </section>
 
@@ -211,8 +208,7 @@
     'restart': 'Restart the head unit now?\n\nThe screens go dark for about two minutes. Do not do this while an install is running, or while driving.',
     'stage-store': 'Download the Store package (and Doom\'s game data) onto this box now?\n\nThe box needs internet for this - join it to a Wi-Fi with internet or plug its Ethernet into your router first.',
     'add-source': 'Add %s to the car\'s Store?\n\nIf the Store is not on the car yet, or has not started, the head unit restarts once (about two minutes, the screens go dark) so it can. The apps then install from Apps > Store on the car (the car needs internet to read the source).',
-    'install-apps': 'Install the recommended apps on the car from this box?\n\nEverything changed is backed up first; the head unit may reboot at the end.',
-    'restore': 'Remove ALL custom apps and put every changed file back to stock?'
+    'restore-coding': 'Write the saved coding (NCD) back to the car?\n\nEXPERIMENTAL. A wrong coding write can leave the HMI partly-coded. Only on a car you can recover with Autel / E-Sys, and only with a backup this box took from THIS car. Every block is read back and checked.'
   };
   var NEEDS_BACKUP = { 'root-flash': true, 'root-fix-key': true };
 
@@ -259,7 +255,6 @@
       var el = $('#' + f); if (document.activeElement !== el) { el.value = c[f] === 'auto' && f === 'gateway' ? '' : (c[f] || ''); }
     });
     fill('#arch', s.arches, c.arch);
-    fill('#language', s.languages, c.language);
     $('#root_ip_override').checked = !!c.root_ip_override;
     if (document.activeElement !== $('#our_repo')) { $('#our_repo').value = c.our_repo || ''; }
     if (!$('#sources').childNodes.length) {
@@ -336,14 +331,14 @@
 
   function carFields() {
     return { vin: $('#vin').value.trim().toUpperCase(), arch: $('#arch').value, ip: $('#ip').value.trim(),
-             gateway: $('#gateway').value.trim() || 'auto', key: $('#key').value.trim(), language: $('#language').value,
+             gateway: $('#gateway').value.trim() || 'auto', key: $('#key').value.trim(),
              root_ip_override: $('#root_ip_override').checked, our_repo: $('#our_repo').value.trim() };
   }
 
   function saveCar() {
     api('/api/car', { method: 'POST', body: carFields() }).then(function (r) { if (!r.ok) { toast(r.error, 'err'); } else { poll(); } });
   }
-  ['vin', 'arch', 'ip', 'gateway', 'key', 'language', 'root_ip_override', 'our_repo'].forEach(function (f) { $('#' + f).addEventListener('change', saveCar); });
+  ['vin', 'arch', 'ip', 'gateway', 'key', 'root_ip_override', 'our_repo'].forEach(function (f) { $('#' + f).addEventListener('change', saveCar); });
   $('#backup').addEventListener('change', function () { if (state) { render(state); } });
 
   function run(action, btn) {
@@ -354,6 +349,11 @@
       body.confirm_backup = true;
     }
     if (action === 'store-install') { body.no_renderer = !$('#renderer').checked; body.no_uplink = !$('#uplink').checked; body.restart = $('#restart').checked; }
+    if (action === 'restore-coding') {
+      body.dry_run = !!(btn && btn.dataset.dry);
+      body.confirm_restore = $('#confirm_restore').checked;
+      if (!body.dry_run && !body.confirm_restore) { toast('Tick the experimental confirmation first (or use Dry run).', 'err'); return; }
+    }
     if (action === 'add-source') {
       body.repo = btn.dataset.repo || (btn.dataset.repoFrom ? $(btn.dataset.repoFrom).value.trim() : '');
       body.channel = btn.dataset.channel || 'releases';
@@ -361,7 +361,7 @@
       if (!body.repo) { toast('Enter the source as owner/repo first.', 'err'); return; }
       what = body.label + ' (' + body.repo + ')';
     }
-    if (CONFIRM[action] && !confirm(CONFIRM[action].replace('%s', what))) { return; }
+    if (CONFIRM[action] && !body.dry_run && !confirm(CONFIRM[action].replace('%s', what))) { return; }
     api('/api/run', { method: 'POST', body: body }).then(function (r) {
       if (!r.ok) { toast(r.error || ('Refused (' + r.status + ')'), 'err'); }
       poll();

@@ -46,10 +46,10 @@ VIN_RE = re.compile(r'^[A-HJ-NPR-Z0-9]{17}$')
 HOST_RE = re.compile(r'^[A-Za-z0-9.:\-\[\]%]+$')
 KEY_FILES = ('id_rsa', 'id_rsa.pkcs1.pem', 'id_rsa.pkcs8.pem', 'id_rsa.ppk', 'connect.txt')
 
-ACTIONS = ('detect-vin', 'backup-coding', 'root-status', 'root-enable', 'root-flash', 'root-fix-key',
-           'root-disable', 'test', 'status', 'store-install', 'restart', 'install-apps', 'restore', 'stage-store',
-           'add-source')
-# the extra Store sources the page offers (the desktop window's App Store / More apps / Bimmhacks apps cards)
+ACTIONS = ('detect-vin', 'backup-coding', 'verify-coding', 'restore-coding',
+           'root-status', 'root-enable', 'root-flash', 'root-fix-key', 'root-disable',
+           'test', 'store-install', 'restart', 'stage-store', 'add-source')
+# the extra Store sources the page offers (idrive7-apps, cluster/HUD maps and car-apps are built in)
 SOURCES = [
     {'id': 'ridetube', 'label': 'RideTube · unofficial YouTube client', 'repo': bi.RIDETUBE_REPO, 'channel': 'releases',
      'builtin': False, 'note': 'GPL-3, by JustAnotherPU; not affiliated with YouTube or Google. Video only while parked; iDrive 7.'},
@@ -62,7 +62,9 @@ ROOT_ACTIONS = {'root-status': 'status', 'root-enable': 'enable', 'root-flash': 
                 'root-fix-key': 'fix-key', 'root-disable': 'disable'}
 DONE = {
     'detect-vin': 'VIN read.',
-    'backup-coding': 'Coding snapshot saved on the box - download it below. Also keep a BimmerCode / E-Sys backup.',
+    'backup-coding': 'Coding backup saved on the box - download it below. Keep your Autel / E-Sys backup too.',
+    'verify-coding': 'Coding compared - see the activity log.',
+    'restore-coding': 'Coding restore finished - see the activity log; verify the car.',
     'root-status': 'State read - see the activity log.',
     'root-enable': 'Root SSH is enabled - the key is saved on the box.',
     'root-flash': 'Flashed and root SSH enabled - the key is saved on the box. Download it to keep a copy.',
@@ -72,8 +74,6 @@ DONE = {
     'status': 'Status read - see the activity log.',
     'store-install': 'App Store installed. Press "Restart head unit" so the Store can start.',
     'restart': 'The head unit restarted.',
-    'install-apps': 'Apps installed - they appear under Apps on the iDrive.',
-    'restore': 'The car is back to stock.',
     'stage-store': 'Store package downloaded onto the box - the App Store now installs without internet on the box.',
     'add-source': 'Added to the car\'s Store - on the car open Apps > Store; the apps appear once it has read the source.',
 }
@@ -94,29 +94,6 @@ def stage_store(log, folder=None):
     bi.do_usb_repo(node, folder, [], log=log)          # no inputs: the Store itself (github:robertnisipeanu/mgu-store)
     if not store_staged(folder):
         raise bi.InstallerError('The download finished but %s holds no Store catalog.' % folder)
-    # app assets git does not keep (Doom's freedoom WAD): the build fetches them, so fetch them now
-    if bi.TOOLS not in sys.path:
-        sys.path.insert(0, bi.TOOLS)
-    try:
-        import build as kit_build
-    except ImportError as e:
-        log('WARNING: the app build tools could not be imported (%s); app assets were not pre-fetched.' % e)
-        return
-    for app, _title, _desc, _exp in bi.list_apps():
-        adir = os.path.join(bi.ROOT, 'apps', app)
-        try:
-            with open(os.path.join(adir, 'app.json'), encoding='utf-8') as f:
-                assets = json.load(f).get('assets') or []
-        except (OSError, ValueError):
-            assets = []
-        if assets:
-            log('Fetching the data files of %s (%s) ...' % (app, ', '.join(a.get('file', '?') for a in assets)))
-            try:
-                kit_build.fetch_assets(adir, assets)
-            except SystemExit as e:          # build.py exits on a checksum mismatch
-                raise bi.InstallerError('%s: %s' % (app, e))
-            except OSError as e:
-                raise bi.InstallerError('%s: could not download its data files: %s' % (app, e))
     log('Staged in %s.' % folder)
 
 
@@ -195,7 +172,7 @@ class Pocket(object):
         arch = cfg.get('arch', 'id7')
         return {'vin': (cfg.get('vin') or '').upper(), 'arch': arch if arch in bi.ARCHES else 'id7',
                 'ip': cfg.get('ip') or bi.DEFAULT_IP, 'key': key, 'key_ok': bool(key and os.path.isfile(key)),
-                'gateway': cfg.get('gateway') or 'auto', 'language': cfg.get('language') or 'en',
+                'gateway': cfg.get('gateway') or 'auto',
                 # root access normally probes the head unit at the address the car itself reports;
                 # this makes it use the IP field instead (a bridge or NAT between the box and the car)
                 'root_ip_override': bool(cfg.get('root_ip_override')),
@@ -229,11 +206,6 @@ class Pocket(object):
             if k and not os.path.isfile(k):
                 raise Refused('No such key file on the box: %s' % k)
             new['key'] = k
-        if 'language' in fields:
-            lang = fields['language']
-            if lang not in bi.list_languages():
-                raise Refused('Unknown language: %r' % lang)
-            new['language'] = lang
         if 'root_ip_override' in fields:
             new['root_ip_override'] = bool(fields['root_ip_override'])
         if 'our_repo' in fields:
@@ -255,7 +227,7 @@ class Pocket(object):
             'version': bi.VERSION,
             'busy': busy, 'since': round(time.time() - started, 1) if started else None,
             'last': last, 'chip': chip, 'log_total': total,
-            'car': self.car(), 'arches': list(bi.ARCHES), 'languages': bi.list_languages(), 'sources': SOURCES,
+            'car': self.car(), 'arches': list(bi.ARCHES), 'sources': SOURCES,
             'box': {'host': socket.gethostname(), 'addresses': addrs,
                     'enet': [a for _, a in addrs if a.startswith('169.254.')],
                     'node': bool(bi.find_node()), 'ssh': bool(bi.find_ssh()),
@@ -324,6 +296,21 @@ class Pocket(object):
                 bi.do_backup_coding(log, vin=vin or None, ip=mgu_ip, gateway=gateway, arch=arch, out_dir=self.backups)
             return self.start(action, fn)
 
+        if action in ('verify-coding', 'restore-coding'):
+            bk = (body.get('backup') or '').strip() or bi.latest_coding_backup(self.backups, vin or None)
+            if not bk or not os.path.isfile(bk):
+                raise Refused('No coding backup to use. Take one with "Back up coding" first.')
+            if action == 'verify-coding':
+                return self.start(action, lambda: bi.do_verify_coding(log, bk, ip=mgu_ip, gateway=gateway, arch=arch))
+            dry = bool(body.get('dry_run'))
+            if not dry and not body.get('confirm_restore'):
+                raise Refused('Restoring coding is experimental and can leave the HMI partly-coded. Tick the '
+                              'confirmation (or run a dry run first).')
+
+            def fn():
+                bi.do_restore_coding(log, bk, ip=mgu_ip, gateway=gateway, arch=arch, dry_run=dry, confirm=not dry)
+            return self.start(action, fn)
+
         if action in ROOT_ACTIONS:
             act = ROOT_ACTIONS[action]
             confirmed = bool(body.get('confirm_backup'))
@@ -354,13 +341,10 @@ class Pocket(object):
         ssh = bi.find_ssh()
         if not ssh:
             raise Refused('The box has no ssh client (apt install openssh-client).')
-        if action in ('test', 'status', 'restore'):
+        if action == 'test':
             def fn():
-                bi.do_simple(ssh, ip, key, action, log)
-                if action == 'restore':
-                    self.set_chip('Back to stock', 'neutral')
-                else:
-                    self.set_chip('SSH OK · ' + ip, 'good')
+                bi.do_test_connection(ssh, ip, key, log)
+                self.set_chip('SSH OK · ' + ip, 'good')
             return self.start(action, fn)
 
         if action == 'restart':
@@ -383,14 +367,6 @@ class Pocket(object):
                     self.set_chip('Store installed · restarted', 'good')
                     return 'App Store installed and the head unit restarted - open Apps > Store on the car.'
                 self.set_chip('Store installed · restart the head unit', 'warn')
-            return self.start(action, fn)
-
-        if action == 'install-apps':
-            apps = [a for a, _t, _d, exp in bi.list_apps() if not exp]       # the recommended set
-            language = car['language']
-
-            def fn():
-                bi.do_install(ssh, node, ip, key, apps, language, reboot=True, log=log)
             return self.start(action, fn)
 
         if action == 'add-source':

@@ -29,16 +29,11 @@ Needs Python 3.6+, Node.js 14+ and the OpenSSH client (built into Windows 10/11,
 Stage A (root access) also needs the `cryptography` Python package; the installer offers to add
 it. Stage C (App Store) needs internet at the car (or a prepared USB stick).
 """
-import argparse, io, json, os, queue, re, shutil, stat, subprocess, sys, tarfile, tempfile, threading, time
+import argparse, json, os, queue, re, shutil, stat, subprocess, sys, tempfile, threading, time
 
-VERSION = '1.8.2'
+VERSION = '1.9.0'
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
-ROOT = os.environ.get('BIMMHACKS_APPS_ROOT') or os.path.join(REPO, 'idrive7-apps')
-TOOLS = os.path.join(ROOT, 'kit', 'tools')
-SDK_DIR = os.path.join(ROOT, 'oap-sdk')
-DIST = os.path.join(ROOT, 'dist')
-DEST = '/var/opt/mgu-custom-apps'          # where the kit lives on the head unit (same as upstream)
 DEFAULT_IP = '169.254.36.47'                # the unit's address with the idrive7-8-ssh-root tool
 CONFIG = os.path.join(os.path.expanduser('~'), '.bimmhacks-installer.json')
 IS_WIN = os.name == 'nt'
@@ -51,21 +46,7 @@ SSHROOT_ENROLL = os.path.join(SSHROOT_DIR, 'data', 'enrollments')
 STORE_DIR = os.environ.get('BIMMHACKS_STORE_DIR') or os.path.join(REPO, 'tools', 'mgu-store')
 STORE_JS = os.path.join(STORE_DIR, 'mgu-install.js')
 ARCHES = ('id7', 'id8-bdc3', 'id8-bcp')
-
-# apps that send control / write requests or are marked experimental upstream: off unless ticked
-EXPERIMENTAL = {'live_adjustments': 'sends DME requests once a tune is picked',
-                'zf8hp': 'read-only, verified EGS variants only',
-                'bimmhacks_tuner': 'new, not yet tested on a car; map switching ships off'}
-LANGUAGE_NAMES = {'en': 'English', 'ko': 'Korean', 'ru': 'Russian', 'zh-CN': 'Chinese (Simplified)'}
-CREDIT = ('Apps: "MGU Custom Apps" by cauliflowermossgrape (MIT licence), free original at '
-          'https://github.com/cauliflowermossgrape/idrive7-apps')
-
-SDK_SOURCES = (
-    # (shell command printing the bytes, kind)
-    ('f=$(ls /usr/lib/oap-mainapp/preinstalled_apps/x_call@*.tgz 2>/dev/null | head -n 1); '
-     '[ -n "$f" ] && cat "$f"', 'tgz'),
-    ('cat /var/opt/public/oap/oap_12204/source/javascript/app.js', 'js'),
-)
+CODING_BACKUP_PY = os.path.join(HERE, 'coding_backup.py')
 
 
 class Done(str):
@@ -105,15 +86,6 @@ def find_ssh():
     return None
 
 
-def tool_env(node):
-    """environment for the build tools: node on PATH, no Docker build of the renderer"""
-    env = dict(os.environ)
-    env['PATH'] = os.path.dirname(node) + os.pathsep + env.get('PATH', '')
-    env['MGU_NO_DOCKER'] = '1'
-    env['PYTHONIOENCODING'] = 'utf-8'
-    return env
-
-
 def popen_noinput(argv, **kw):
     """Start a child that is never asked anything. Its stdin is CLOSED (an empty pipe) rather than the NUL
     device: on Windows Python reports NUL as a terminal (os.isatty is True there), so a tool that asks
@@ -124,8 +96,8 @@ def popen_noinput(argv, **kw):
     return p
 
 
-def preflight(log):
-    """-> (node, ssh) or raises with what to install"""
+def preflight(log, need_ssh=True):
+    """Node (for the App Store installer) and, when need_ssh, the OpenSSH client. -> (node, ssh)."""
     problems = []
     if sys.version_info < (3, 6):
         problems.append('Python 3.6 or newer is needed (this is %s)' % sys.version.split()[0])
@@ -139,38 +111,12 @@ def preflight(log):
             problems.append('Node.js 14 or newer is needed (found %s): https://nodejs.org/'
                             % out.stdout.decode('ascii', 'replace').strip())
     ssh = find_ssh()
-    if not ssh:
+    if need_ssh and not ssh:
         problems.append('The OpenSSH client is missing. Windows: Settings > Apps > Optional features > '
                         'add "OpenSSH Client"')
-    if not os.path.isfile(os.path.join(TOOLS, 'make_kit.py')):
-        problems.append('The app sources are missing: expected them in %s' % ROOT)
     if problems:
         raise InstallerError('\n'.join(problems))
-    log('Python %s, Node.js %s, ssh OK' % (sys.version.split()[0],
-        subprocess.run([node, '--version'], stdout=subprocess.PIPE).stdout.decode().strip()))
     return node, ssh
-
-
-def list_apps():
-    """[(id, title, description, experimental_note or None)] from apps/*/app.json"""
-    out = []
-    apps_dir = os.path.join(ROOT, 'apps')
-    for d in sorted(os.listdir(apps_dir)) if os.path.isdir(apps_dir) else []:
-        p = os.path.join(apps_dir, d, 'app.json')
-        if not os.path.isfile(p):
-            continue
-        with open(p, encoding='utf-8') as f:
-            spec = json.load(f)
-        out.append((d, spec.get('title', d), spec.get('description', ''), EXPERIMENTAL.get(d)))
-    return out
-
-
-def list_languages():
-    locales = os.path.join(ROOT, 'kit', 'runtime', 'locales')
-    langs = ['en']
-    if os.path.isdir(locales):
-        langs += sorted(n[:-5] for n in os.listdir(locales) if n.endswith('.json') and n != 'en.json')
-    return langs
 
 
 def ip_from_key(key):
@@ -273,10 +219,10 @@ class Car:
 # ----------------------------------------------------------------------------- the steps
 
 def test_connection(car, log):
+    """Check we can log in to the head unit as root and it is an MGU with the app platform."""
     log('Connecting to the head unit at %s ...' % car.ip)
     code, out = car.run('echo CONNECTED; id -u; '
-                        '[ -d /var/opt/public/oap/oap_12201 ] && echo MGU_OAP_OK; '
-                        '[ -f %s/deploy-car.sh ] && echo KIT_PRESENT; true' % DEST, echo=False)
+                        '[ -d /var/opt/public/oap/oap_12201 ] && echo MGU_OAP_OK; true', echo=False)
     if 'CONNECTED' not in out:
         raise InstallerError('Could not log in to the head unit (%s).\n%s\n'
                              'Check: ignition on, the car is connected (Ethernet / Wi-Fi), the IP address, '
@@ -284,94 +230,16 @@ def test_connection(car, log):
     if '\n0\n' not in '\n' + out + '\n':
         raise InstallerError('Logged in, but not as root. The installer needs the root SSH key.')
     if 'MGU_OAP_OK' not in out:
-        raise InstallerError('This does not look like an MGU (iDrive 7) head unit with the app platform.')
+        raise InstallerError('This does not look like an MGU (iDrive 7 / 8) head unit with the app platform.')
     log('Connected as root. MGU app platform found.')
-    return 'KIT_PRESENT' in out
 
 
-def fetch_sdk(car, node, log, workdir):
-    """extract BMW's oap-sdk from THIS car's own x_call app into idrive7-apps/oap-sdk"""
-    log("Reading BMW's app SDK from the car (it is never shipped with this installer) ...")
-    app_js = None
-    for cmd, kind in SDK_SOURCES:
-        data = car.read(cmd)
-        if not data:
-            continue
-        if kind == 'js':
-            app_js = data
-        else:
-            try:
-                with tarfile.open(fileobj=io.BytesIO(data), mode='r:*') as tf:
-                    for m in tf.getmembers():
-                        if m.isfile() and m.name.replace('\\', '/').endswith('javascript/app.js'):
-                            app_js = tf.extractfile(m).read()
-                            break
-            except tarfile.TarError:
-                app_js = None
-        if app_js:
-            break
-    if not app_js:
-        raise InstallerError('Could not read the x_call app from the head unit, so the SDK cannot be extracted.')
-    src = os.path.join(workdir, 'x_call_app.js')
-    with open(src, 'wb') as f:
-        f.write(app_js)
-    shutil.rmtree(SDK_DIR, ignore_errors=True)   # never mix one car's SDK into another's build
-    p = subprocess.run([node, os.path.join(TOOLS, 'extract_sdk.js'), src, SDK_DIR],
-                       stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-    for line in p.stdout.decode('utf-8', 'replace').splitlines():
-        log('  sdk> ' + line)
-    if p.returncode or not all(os.path.isfile(os.path.join(SDK_DIR, n)) for n in ('index.js', 'package.json')):
-        raise InstallerError('Extracting the SDK failed (see the log above).')
-    log('SDK extracted.')
-
-
-def build_kit(node, apps, language, log):
-    """-> path of the kit .tar.gz"""
-    log('Building %d app(s) in %s: %s' % (len(apps), LANGUAGE_NAMES.get(language, language), ' '.join(apps)))
-    if 'doom' in apps and not os.path.isfile(os.path.join(ROOT, 'apps', 'doom', 'freedoom1.wad')):
-        log('  (Doom: the free game data, 24 MB, is downloaded once - needs internet)')
-    cmd = [sys.executable, os.path.join(TOOLS, 'make_kit.py'), '--language', language] + list(apps)
-    p = popen_noinput(cmd, cwd=ROOT, env=tool_env(node), stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-    for raw in iter(p.stdout.readline, b''):
-        line = raw.decode('utf-8', 'replace').rstrip('\r\n')
-        log('  build> ' + line)
-        if 'which is OLDER than the source' in line:
-            log('  (expected on a PC without Docker: the kit uses the prebuilt graphics renderer that ships with the apps)')
-    p.stdout.close()
-    if p.wait():
-        raise InstallerError('Building the apps failed (see the log above).')
-    name = 'mgu-custom-apps' + ('' if language == 'en' else '-' + language)
-    archive = os.path.join(DIST, name + '.tar.gz')
-    if not os.path.isfile(archive):
-        raise InstallerError('The build finished but %s is missing.' % archive)
-    log('Kit ready (%.1f MB).' % (os.path.getsize(archive) / 1e6))
-    return archive
-
-
-def push_kit(car, archive, log):
-    log('Copying the kit to the head unit ...')
-    with open(archive, 'rb') as f:
-        data = f.read()
-    # the archive's top folder is mgu-custom-apps -> /var/opt/mgu-custom-apps; apps/ is replaced, not
-    # merged (old .mgu files left there would be installed too)
-    code, out = car.run("mkdir -p '%s' && rm -rf '%s/apps' && tar xzf - -C /var/opt && cd '%s' && "
-                        "md5sum -c KIT_SUMS >/dev/null && echo KIT_VERIFIED" % (DEST, DEST, DEST),
-                        stdin_data=data, echo=False)
-    if code or 'KIT_VERIFIED' not in out:
-        raise InstallerError('Copying the kit failed:\n' + out.strip())
-    log('Kit copied and verified on the car.')
-
-
-def remote(car, command, env=None, log=print):
-    envs = ' '.join('%s=%s' % (k, v) for k, v in (env or {}).items())
-    return car.run("cd '%s' && %s sh deploy-car.sh %s" % (DEST, envs, command))
-
-
-def cleanup(log):
-    """the SDK and the .mgu files contain BMW's code: don't leave them on the shop PC"""
-    shutil.rmtree(SDK_DIR, ignore_errors=True)
-    shutil.rmtree(DIST, ignore_errors=True)
-    log("Removed the local copy of BMW's SDK and the build output.")
+def do_test_connection(ssh, ip, key, log=print):
+    car = Car(ssh, ip, key, log=log)
+    try:
+        test_connection(car, log)
+    finally:
+        car.close()
 
 
 # ------------------------------------------------------- stage A: root access (idrive7-8-ssh-root)
@@ -531,44 +399,86 @@ def vin_from_output(lines):
 CODING_BACKUP_DIR = os.path.join(REPO, 'coding-backups')
 
 
-def do_backup_coding(log, vin=None, ip=None, gateway='auto', arch='id7', out_dir=None):
-    """Save a diagnostic snapshot of the car's CAFD versions, VIN, IP and faults. -> file path.
-
-    NOT a restorable coding backup (that needs BimmerCode / E-Sys); it records exactly what is on
-    the car so a restore is reliable. Run it before any flash."""
+def _run_coding(args, log, gateway='auto', ip=None, arch='id7'):
+    """Run coding_backup.py (a subprocess, like the root tool) and stream it. -> (exit code, lines)."""
     ensure_cryptography(log)
-    out_dir = out_dir or CODING_BACKUP_DIR
-    backup = os.path.join(HERE, 'coding_backup.py')
-    if not os.path.isfile(backup):
+    if not os.path.isfile(CODING_BACKUP_PY):
         raise InstallerError('coding_backup.py is missing next to the installer.')
-    log('Reading the head unit over ENET for a coding snapshot (read-only) ...')
-    argv = [sys.executable, backup, '--out', out_dir]
+    argv = [sys.executable, CODING_BACKUP_PY] + list(args)
     if gateway and gateway != 'auto':
         argv += ['--gateway', gateway]
     if ip:
         argv += ['--mgu-ip', ip]
     if arch and arch != 'id7':
         argv += ['--arch', arch]
-    if vin:
-        argv += ['--vin', vin]
-    env = dict(os.environ)
-    env['PYTHONIOENCODING'] = 'utf-8'
-    env['PYTHONUNBUFFERED'] = '1'
+    env = dict(os.environ, PYTHONIOENCODING='utf-8', PYTHONUNBUFFERED='1')
     p = popen_noinput(argv, cwd=SSHROOT_DIR, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-    saved = None
+    lines = []
     for raw in iter(p.stdout.readline, b''):
         line = raw.decode('utf-8', 'replace').rstrip('\r\n')
         if 'DeprecationWarning' in line or 'utcnow()' in line:
             continue
+        lines.append(line)
         log('  coding> ' + line)
-        if line.strip().endswith('.txt'):
-            saved = line.strip()
     p.stdout.close()
-    if p.wait():
-        raise InstallerError('The coding snapshot could not be read. Is the ENET cable in and the car awake?')
-    log('Coding snapshot saved in: ' + out_dir)
-    log('REMINDER: a snapshot is not a restore. Also back up the coding with BimmerCode or E-Sys.')
+    return p.wait(), lines
+
+
+def do_backup_coding(log, vin=None, ip=None, gateway='auto', arch='id7', out_dir=None, no_ncd=False):
+    """Back up the car's coding over ENET: the proven snapshot (CAFD versions / VIN / IP / faults) and,
+    where the unit hands it over, the coding data (NCD) itself. -> backup .txt path. Run before any flash."""
+    out_dir = out_dir or CODING_BACKUP_DIR
+    log('Reading the head unit over ENET for a coding backup ...')
+    args = ['backup', '--out', out_dir]
+    if vin:
+        args += ['--vin', vin]
+    if no_ncd:
+        args.append('--no-ncd')
+    code, lines = _run_coding(args, log, gateway=gateway, ip=ip, arch=arch)
+    if code:
+        raise InstallerError('The coding backup could not be read. Is the ENET cable in and the car awake?')
+    saved = next((l.strip() for l in lines if l.strip().endswith('.txt')), None)
+    log('Coding backup saved in: ' + out_dir)
     return saved or out_dir
+
+
+def latest_coding_backup(out_dir=None, vin=None):
+    """The newest coding-backup-*.json in the folder (optionally for a VIN), or None."""
+    out_dir = out_dir or CODING_BACKUP_DIR
+    if not os.path.isdir(out_dir):
+        return None
+    hits = [n for n in os.listdir(out_dir) if n.startswith('coding-backup-') and n.endswith('.json')
+            and (not vin or vin.upper() in n)]
+    if not hits:
+        return None
+    return os.path.join(out_dir, sorted(hits)[-1])
+
+
+def do_verify_coding(log, backup_json, ip=None, gateway='auto', arch='id7'):
+    """Read-only: compare the car's current coding to a backup. -> True if all blocks matched."""
+    if not backup_json or not os.path.isfile(backup_json):
+        raise InstallerError('Pick a coding backup (.json) to verify against.')
+    log('Comparing the car\'s coding to %s ...' % os.path.basename(backup_json))
+    code, _ = _run_coding(['verify', '--backup', backup_json], log, gateway=gateway, ip=ip, arch=arch)
+    return code == 0
+
+
+def do_restore_coding(log, backup_json, ip=None, gateway='auto', arch='id7', dry_run=False, confirm=False):
+    """EXPERIMENTAL. Write the saved coding (NCD) back to the car with read-back verify. -> exit code."""
+    if not backup_json or not os.path.isfile(backup_json):
+        raise InstallerError('Pick a coding backup (.json) to restore from.')
+    args = ['restore', '--backup', backup_json]
+    if dry_run:
+        args.append('--dry-run')
+    if confirm:
+        args.append('--confirm-restore')
+    code, _ = _run_coding(args, log, gateway=gateway, ip=ip, arch=arch)
+    if code == 2:
+        raise InstallerError('The coding restore was refused (see the log above).')
+    if code:
+        raise InstallerError('The coding restore did not complete cleanly (see the log above). Finish it with '
+                             'E-Sys / Autel from the saved .ncd files before relying on the car.')
+    return code
 
 
 # -------------------------------------------------------------- restarting the head unit
@@ -882,65 +792,6 @@ def source_done_message(result, label):
     }.get(result, 'Done.')
 
 
-def do_install(ssh, node, ip, key, apps, language, reboot=True, controller_gate=True, keep_build=False, log=print):
-    if not apps:
-        raise InstallerError('Pick at least one app.')
-    car = Car(ssh, ip, key, log=log)
-    work = tempfile.mkdtemp(prefix='bimmhacks-work-')
-    try:
-        test_connection(car, log)
-        fetch_sdk(car, node, log, work)
-        archive = build_kit(node, apps, language, log)
-        push_kit(car, archive, log)
-        log('Checking the head unit (read-only) ...')
-        code, _ = remote(car, 'check', log=log)
-        if code:
-            raise InstallerError('The check found a problem (see above). Nothing was changed on the car.')
-        log('Installing. Keep the ignition on. The screen reloads; this takes a few minutes ...')
-        env = {}
-        if not reboot:
-            env['NO_REBOOT'] = '1'
-        if not controller_gate:
-            env['NO_INPUTGATE'] = '1'
-        code, out = remote(car, 'install', env, log=log)
-        if code and 'rebooting the head unit' in out and 'done.' in out:
-            code = 0      # the unit rebooted itself at the end and dropped the connection: expected
-        if code:
-            raise InstallerError('The install stopped (see above). To undo, use "Restore to stock".')
-        if 'rebooting the head unit' in out:
-            log('The head unit is rebooting (screen black about a minute), then the apps are under Apps.')
-        else:
-            log('Done. After 1-2 minutes the new tiles are under Apps on the iDrive.')
-        log(CREDIT)
-    finally:
-        car.close()
-        shutil.rmtree(work, ignore_errors=True)
-        if not keep_build:
-            cleanup(log)
-
-
-def do_simple(ssh, ip, key, what, log=print):
-    car = Car(ssh, ip, key, log=log)
-    try:
-        present = test_connection(car, log)
-        if what == 'test':
-            log('The kit is already on this car (use Status to see what is installed).' if present
-                else 'Nothing installed by this tool yet.')
-            return
-        if not present:
-            raise InstallerError('Nothing installed by this tool on this car (no %s/deploy-car.sh).' % DEST)
-        if what == 'status':
-            remote(car, 'status', log=log)
-        elif what == 'restore':
-            log('Restoring the stock backup: removes the custom apps, puts every changed file back ...')
-            code, _ = remote(car, 'restore', {'YES': '1'}, log=log)
-            if code:
-                raise InstallerError('Restore reported a problem (see above).')
-            log('Back to stock.')
-    finally:
-        car.close()
-
-
 # ------------------------------------------------------------ PIDs from a capture (installer/pid_capture.py)
 
 def do_pid_capture(path, log=print, out_dir=None):
@@ -1018,8 +869,6 @@ def run_gui():
     from tkinter import ttk, filedialog, messagebox
 
     cfg = load_config()
-    apps = list_apps()
-    langs = list_languages()
     q = queue.Queue()
     busy = {'on': False}
     buttons = []
@@ -1028,7 +877,7 @@ def run_gui():
     font = lambda size=10, weight='normal': (F, size, weight)
 
     root = tk.Tk()
-    root.title('Bimmhacks  -  MGU Flash & App Studio')
+    root.title('Bimmhacks MGU Tool  -  BMW iDrive 7 & 8')
     root.minsize(940, 800)
     root.configure(bg=BG)
 
@@ -1074,7 +923,7 @@ def run_gui():
     tk.Frame(hi, bg=ACCENT, width=10, height=10).pack(side='left', pady=(5, 0))
     tk.Label(hi, text='Bimmhacks', bg=PANEL, fg=INK, font=font(15, 'bold')).pack(side='left', padx=(10, 12))
     tk.Frame(hi, bg=LINE, width=1, height=20).pack(side='left', pady=(3, 0))
-    tk.Label(hi, text='MGU Flash & App Studio  ·  BMW iDrive 7 and 8', bg=PANEL, fg=MUTED, font=font(10)).pack(side='left', padx=(12, 0), pady=(3, 0))
+    tk.Label(hi, text='Root access  ·  Coding backup  ·  App Store  ·  BMW iDrive 7 and 8', bg=PANEL, fg=MUTED, font=font(10)).pack(side='left', padx=(12, 0), pady=(3, 0))
     tk.Label(hi, text='by Mr. Wali', bg=PANEL, fg=ACCENT, font=font(10, 'bold')).pack(side='right', pady=(3, 0))
     tk.Frame(root, bg=LINE, height=1).pack(fill='x')
 
@@ -1108,10 +957,10 @@ def run_gui():
     def para(parent, text, muted=True, wrap=860):
         ttk.Label(parent, text=text, style='Muted.TLabel' if muted else 'TLabel', justify='left', wraplength=wrap).pack(anchor='w', padx=18, pady=(2, 2))
 
-    def notice(parent, text):
+    def notice(parent, text, wrap=840):
         f = tk.Frame(parent, bg=WARN_SOFT)
         f.pack(fill='x', padx=18, pady=(8, 2))
-        ttk.Label(f, text=text, style='Warn.TLabel', justify='left', wraplength=840).pack(anchor='w', padx=12, pady=8)
+        ttk.Label(f, text=text, style='Warn.TLabel', justify='left', wraplength=wrap).pack(anchor='w', padx=12, pady=8)
 
     def row(parent, pady=(8, 12)):
         f = tk.Frame(parent, bg=PANEL)
@@ -1211,14 +1060,10 @@ def run_gui():
     content.columnconfigure(0, weight=1)
 
     def save():
-        picked = [a for a, v in app_vars.items() if v.get()]
         save_config(dict(load_config(),
                          vin=vin_var.get().strip().upper(), key=key_var.get().strip().strip('"'),
                          ip=ip_var.get().strip(),
-                         arch=ARCHES[arch_box.current()] if arch_box.current() >= 0 else 'id7',
-                         apps=picked,
-                         language=langs[lang_box.current()] if lang_box.current() >= 0 else 'en',
-                         reboot=reboot_var.get()))
+                         arch=ARCHES[arch_box.current()] if arch_box.current() >= 0 else 'id7'))
 
     def conn_values():
         save()
@@ -1259,27 +1104,31 @@ def run_gui():
                 q.put(('done', (False, 'Unexpected error: %s' % e)))
         threading.Thread(target=work, daemon=True).start()
 
-    # ======================================================= 1. Root access
+    # ======================================================= 1. Root access (+ coding backup / restore)
     p1 = section('Root access')
-    c1 = card(p1, pady=(10, 10))
+    l1, r1c = two_up(p1, (3, 2))
+    c1 = card(l1, pady=(0, 10), padx=(22, 6))
     kicker(c1, 'Step 1  ·  once per car')
-    title(c1, 'Back up the coding, then enable root over ENET')
-    para(c1, 'Wired ENET cable, ignition on. Already rooted and holding the key? Skip this step and pick '
-             'the key with Browse above. The tool reads the head unit\'s address from the car itself; the '
-             'IP field is filled in when it is done.')
-    notice(c1, 'Flashing reprograms the head unit and wipes its coding and BMW Digital Key pairings. Back up '
-               'first; re-pair keys after. Windows: run as Administrator.')
+    title(c1, 'Back up the coding, then root over ENET')
+    para(c1, 'Wired ENET cable, ignition on. Already rooted and holding the key? Skip this and pick the key '
+             'with Browse above - the tool reads the head unit\'s address from the car, and fills the IP in.', wrap=400)
+    notice(c1, 'Flashing reprograms the head unit and wipes its coding and BMW Digital Key pairings. Back up the '
+               'coding first (below); re-pair keys after. Windows: run as Administrator.', wrap=500)
     backup_done = tk.BooleanVar(value=False)
-    g = row(c1, pady=(8, 0))
-    ttk.Checkbutton(g, variable=backup_done, text='I have saved a restorable coding backup (BimmerCode / E-Sys)').pack(side='left', padx=4)
+    gchk = row(c1, pady=(8, 0))
+    ttk.Checkbutton(gchk, variable=backup_done,
+                    text='I have a coding backup (this tool, BimmerCode / E-Sys or Autel)').pack(side='left', padx=4)
+    restore_var = tk.StringVar(value=latest_coding_backup() or '')
 
     def on_backup():
         vin, _, _, arch = conn_values()
         def w():
             path = do_backup_coding(log, vin=vin or None, arch=arch)
             ui_set(backup_done, True)
-            log('Snapshot captured. Keep it with your BimmerCode/E-Sys backup: ' + str(path))
-        start(w, 'Coding snapshot saved - see the activity log. Also keep a BimmerCode/E-Sys backup.')
+            if path and path.endswith('.txt'):
+                ui_set(restore_var, path[:-4] + '.json')
+            log('Backup done. Keep it safe; also keep your BimmerCode / E-Sys / Autel backup.')
+        start(w, 'Coding backup saved - see the activity log.')
 
     def on_detect_vin():
         _, _, _, arch = conn_values()
@@ -1295,14 +1144,12 @@ def run_gui():
     def on_root(action, confirm=None, need_backup=False):
         vin, _, _, arch = conn_values()
         if need_backup and not backup_done.get():
-            messagebox.showwarning('Back up first', 'Save a coding backup before flashing.\n\nClick '
-                                   '"Back up coding" and take a BimmerCode / E-Sys backup, then tick the box.')
+            messagebox.showwarning('Back up first', 'Save a coding backup before flashing.\n\nClick "Back up '
+                                   'coding", or take a BimmerCode / E-Sys / Autel backup, then tick the box.')
             return
         if confirm and not messagebox.askyesno('Root access', confirm):
             return
         def w():
-            # no IP override: the tool reads the head unit's address from the car (22 17 2A) and writes
-            # it into connect.txt, from which the field is filled
             key = do_root(action, log, vin=vin or None, arch=arch, backup_confirmed=backup_done.get())
             if key:
                 ui_set(key_var, key)
@@ -1312,104 +1159,73 @@ def run_gui():
                 set_chip('Rooted  ·  key saved', 'good')
         start(w, 'Root-access step finished - see the activity log.')
 
-    r1 = row(c1, pady=(6, 4))
-    button(r1, 'Detect VIN', on_detect_vin)
-    button(r1, 'Back up coding', on_backup)
-    button(r1, 'Check state', lambda: on_root('status'))
-    r2 = row(c1, pady=(0, 16))
-    button(r2, 'Flash + enable SSH', lambda: on_root('flash',
+    rr1 = row(c1, pady=(6, 4))
+    button(rr1, 'Detect VIN', on_detect_vin)
+    button(rr1, 'Back up coding', on_backup)
+    button(rr1, 'Check state', lambda: on_root('status'))
+    rr2 = row(c1, pady=(0, 14))
+    button(rr2, 'Flash + enable SSH', lambda: on_root('flash',
            'Flash the debug image and enable root SSH?\n\nThis REPROGRAMS the head unit and WIPES its coding '
            'and Digital Key pairings. Do this only once per car.', need_backup=True), style='Accent.TButton')
-    button(r2, 'Enable (repair)', lambda: on_root('enable'))
-    button(r2, 'Fix refusing key', lambda: on_root('fix-key',
+    button(rr2, 'Enable (repair)', lambda: on_root('enable'))
+    rr3 = row(c1, pady=(0, 14))
+    button(rr3, 'Fix refusing key', lambda: on_root('fix-key',
            'Re-flash to install our root key? Use only if SSH opens but login is refused. It re-flashes '
            '(wipes coding again).', need_backup=True))
-    button(r2, 'Disable', lambda: on_root('disable', 'Revert persistence and stop debug/SSH on this car?'), style='Danger.TButton')
+    button(rr3, 'Disable', lambda: on_root('disable', 'Revert persistence and stop debug/SSH on this car?'), style='Danger.TButton')
 
-    # ======================================================= 2. Apps
-    p2 = section('Apps')
-    c2 = card(p2, pady=(10, 10))
-    kicker(c2, 'Step 2  ·  the custom apps')
-    title(c2, 'Install the MGU apps on the car')
-    sel = tk.Frame(c2, bg=PANEL)
-    sel.pack(fill='x', padx=14, pady=(4, 2))
-    chosen = set(cfg.get('apps') or [a for a, _, _, exp in apps if not exp])
-    app_vars = {}
-    for i, (aid, t, desc, exp) in enumerate(apps):
-        v = tk.BooleanVar(value=aid in chosen)
-        app_vars[aid] = v
-        ttk.Checkbutton(sel, text=t + ('  ·  experimental' if exp else ''), variable=v).grid(
-            row=i // 3, column=i % 3, sticky='w', padx=6, pady=2)
-    lf = row(c2, pady=(8, 2))
-    ttk.Label(lf, text='Language', style='Muted.TLabel').pack(side='left', padx=(4, 8))
-    lang_box = ttk.Combobox(lf, state='readonly', width=22, values=['%s - %s' % (l, LANGUAGE_NAMES.get(l, l)) for l in langs])
-    lang_box.current(langs.index(cfg.get('language', 'en')) if cfg.get('language', 'en') in langs else 0)
-    lang_box.pack(side='left', padx=(0, 10))
+    # ---- right: experimental coding restore -------------------------------------------------------
+    c1b = card(r1c, pady=(0, 10), padx=(6, 22))
+    kicker(c1b, 'Coding  ·  experimental')
+    title(c1b, 'Restore the coding after a flash')
+    para(c1b, 'A flash wipes the head unit\'s coding. "Back up coding" saves the CAFD versions and, where the '
+              'unit hands it over, the coding data (NCD) itself. This can write that NCD back and read it back '
+              'to verify it.', wrap=320)
+    notice(c1b, 'Experimental: a wrong coding write can leave the HMI partly-coded. Keep E-Sys / Autel ready and '
+                'try it on a car you can recover. "Verify" and "Dry run" never write to the car.', wrap=300)
+    bf = row(c1b, pady=(6, 2))
+    ttk.Label(bf, text='Backup', style='Muted.TLabel').pack(side='left', padx=(4, 8))
+    button(bf, 'Browse', lambda: _pick_backup(), side='right')
+    ttk.Entry(bf, textvariable=restore_var, width=6).pack(side='left', fill='x', expand=True, padx=(0, 6))
 
-    def set_all(on):
-        for aid, v in app_vars.items():
-            v.set(on and aid not in EXPERIMENTAL)
-    button(lf, 'Recommended', lambda: set_all(True))
-    button(lf, 'None', lambda: set_all(False))
-    reboot_var = tk.BooleanVar(value=cfg.get('reboot', True))
-    ttk.Checkbutton(c2, text='Reboot the head unit at the end if needed (for the Doom controller gate)',
-                    variable=reboot_var).pack(anchor='w', padx=20, pady=(4, 2))
+    def _pick_backup():
+        p = filedialog.askopenfilename(title='A coding backup (.json)', initialdir=CODING_BACKUP_DIR,
+                                       filetypes=[('Coding backup', '*.json'), ('All files', '*.*')])
+        if p:
+            restore_var.set(p)
 
-    def on_test():
-        _, key, ip, _ = conn_values()
+    def on_verify():
+        _, _, _, arch = conn_values()
+        bk = restore_var.get().strip()
+        start(lambda: do_verify_coding(log, bk, arch=arch), 'Coding compared - see the activity log.')
+
+    def on_restore(dry):
+        _, _, _, arch = conn_values()
+        bk = restore_var.get().strip()
+        if not dry and not messagebox.askyesno(
+                'Restore coding (experimental)',
+                'Write the saved coding (NCD) back to the car?\n\nThis is EXPERIMENTAL. A wrong coding write can '
+                'leave the HMI partly-coded. Only run it on a car you can recover with E-Sys / Autel, and only '
+                'with a backup this tool took from THIS car.\n\nEvery block is read back and checked. Continue?'):
+            return
         def w():
-            do_simple(need_ssh(), ip, key, 'test', log)
-            set_chip('SSH OK  ·  ' + ip, 'good')
-        start(w, 'Connection OK.')
+            do_restore_coding(log, bk, arch=arch, dry_run=dry, confirm=not dry)
+        start(w, 'Coding dry-run done - see the activity log.' if dry else
+              'Coding restore finished - see the activity log. Verify the car, and finish with E-Sys / Autel if any block failed.')
 
-    def on_install():
-        _, key, ip, _ = conn_values()
-        picked = [a for a, v in app_vars.items() if v.get()]
-        lang = langs[lang_box.current()] if lang_box.current() >= 0 else 'en'
-        if not picked:
-            messagebox.showwarning('Bimmhacks', 'Pick at least one app.')
-            return
-        exp_picked = [t for a, t, _, e in apps if a in picked and e]
-        if exp_picked and not messagebox.askyesno(
-                'Experimental apps', 'You picked experimental apps:\n\n  ' + '\n  '.join(exp_picked) +
-                '\n\nThey are new or limited-tested. Engine Config and Bimmhacks Tuner can send control '
-                'requests to the engine unit, but only once you switch that on in their Settings '
-                '(both ship off).\n\nInstall them anyway?'):
-            return
-        if not messagebox.askokcancel('Install', 'Install %d app(s) on the car at %s?\n\nEverything '
-                                      'changed is backed up first and can be undone with Restore to '
-                                      'stock.' % (len(picked), ip)):
-            return
-        reboot = reboot_var.get()
-        def w():
-            node, ssh = preflight(log)
-            do_install(ssh, node, ip, key, picked, lang, reboot=reboot, log=log)
-        start(w, 'Install finished. The apps appear under Apps on the iDrive.')
+    vr = row(c1b, pady=(6, 2))
+    button(vr, 'Verify coding', on_verify)
+    button(vr, 'Dry run', lambda: on_restore(True))
+    vr2 = row(c1b, pady=(0, 12))
+    button(vr2, 'Restore coding (experimental)', lambda: on_restore(False), style='Danger.TButton')
 
-    def on_status():
-        _, key, ip, _ = conn_values()
-        start(lambda: do_simple(need_ssh(), ip, key, 'status', log), 'Status read - see the activity log.')
-
-    def on_restore():
-        _, key, ip, _ = conn_values()
-        if not messagebox.askyesno('Restore to stock', 'Remove ALL custom apps and put every changed '
-                                   'file back exactly as it was before the first install?'):
-            return
-        start(lambda: do_simple(need_ssh(), ip, key, 'restore', log), 'The car is back to stock.')
-
-    ab = row(c2)
-    button(ab, 'Test connection', on_test)
-    button(ab, 'Install / update apps', on_install, style='Accent.TButton')
-    button(ab, 'Status', on_status)
-    button(ab, 'Restore to stock', on_restore, style='Danger.TButton')
-
-    # ======================================================= 3. App Store (+ RideTube)
-    p3 = section('App Store')
-    l3, r3 = two_up(p3, (3, 2))
-    c3 = card(l3, pady=(0, 10), padx=(22, 6))
-    kicker(c3, 'Step 3  ·  on-car store')
-    title(c3, 'Install the MGU App Store')
-    para(c3, 'The car then browses, installs and updates apps from its own screen (Apps > Store). It needs '
+    # ======================================================= 2. App Store
+    p2 = section('App Store')
+    l2, r2c = two_up(p2, (3, 2))
+    c2 = card(l2, pady=(0, 10), padx=(22, 6))
+    kicker(c2, 'Step 2  ·  on-car store')
+    title(c2, 'Install the MGU App Store')
+    para(c2, 'The car then browses, installs and updates apps from its own screen (Apps > Store). It needs '
              'internet for that, and the Store only starts after the head unit has restarted.', wrap=470)
 
     def option(parent, var, text, explain):
@@ -1418,14 +1234,21 @@ def run_gui():
     renderer_var = tk.BooleanVar(value=not cfg.get('no_renderer', False))
     uplink_var = tk.BooleanVar(value=not cfg.get('no_uplink', False))
     restart_var = tk.BooleanVar(value=cfg.get('store_restart', True))
-    option(c3, renderer_var, 'Renderer',
+    option(c2, renderer_var, 'Renderer',
            'Draws the Store and other apps with the head unit\'s graphics chip: smooth, with the on-screen '
            'keyboard. Without it the Store falls back to simpler screens.')
-    option(c3, uplink_var, 'Internet uplink',
+    option(c2, uplink_var, 'Internet uplink',
            'Gives the car internet through a USB Ethernet adapter, an LTE stick, phone tethering or Wi-Fi, so '
            'the Store can download apps. Untick only if you will install from a USB stick.')
-    option(c3, restart_var, 'Restart the head unit when done',
+    option(c2, restart_var, 'Restart the head unit when done',
            'About two minutes; the installer waits until the car is back.')
+
+    def on_test():
+        _, key, ip, _ = conn_values()
+        def w():
+            do_test_connection(need_ssh(), ip, key, log)
+            set_chip('SSH OK  ·  ' + ip, 'good')
+        start(w, 'Connection OK.')
 
     def on_store():
         _, key, ip, _ = conn_values()
@@ -1449,153 +1272,65 @@ def run_gui():
                                       'driving.' % ip):
             return
         start(lambda: do_restart_head_unit(ip, key, log=log), 'The head unit restarted.')
-    sr = row(c3, pady=(10, 12))
+    sr = row(c2, pady=(10, 4))
+    button(sr, 'Test connection', on_test)
     button(sr, 'Install the App Store', on_store, style='Accent.TButton')
-    button(sr, 'Restart head unit', on_restart)
+    sr2 = row(c2, pady=(0, 12))
+    button(sr2, 'Restart head unit', on_restart)
 
-    def pick_stage(var):
-        d = filedialog.askdirectory(title='Folder or USB stick to stage the apps onto')
-        if d:
-            var.set(d)
+    # ---- right: add sources to the car's Store ----------------------------------------------------
+    c2b = card(r2c, pady=(0, 10), padx=(6, 22))
+    kicker(c2b, 'Sources  ·  on the car')
+    title(c2b, 'Add apps to the Store')
+    para(c2b, 'idrive7-apps, the cluster / HUD maps and IterioDev\'s car-apps are built in - they appear in the '
+              'car\'s Store as soon as it is installed. Add RideTube or your own GitHub repo here, or on the car '
+              '(Apps > Store > Add source).', wrap=320)
 
-    def source_card(parent, kick, head, text, repo, label, cfg_key, done_msg, confirm, url, licence=None, padx=22, wrap=860):
-        """A card for an extra Store source: stage to USB (offline) or make it available online."""
-        c = card(parent, pady=(0, 10), padx=padx)
-        kicker(c, kick)
-        title(c, head)
-        para(c, text, wrap=wrap)
-        if licence:
-            para(c, licence, wrap=wrap)
-        stage = tk.StringVar(value=cfg.get(cfg_key, ''))
-        f = row(c, pady=(6, 2))
-        ttk.Label(f, text='Stage to USB', style='Muted.TLabel').pack(side='left', padx=(4, 8))
-        button(f, 'Choose', lambda: pick_stage(stage), side='right')
-        ttk.Entry(f, textvariable=stage, width=6).pack(side='left', fill='x', expand=True, padx=(0, 6))
-
-        def go():
-            _, key, ip, _ = conn_values()
-            save_config(dict(load_config(), **{cfg_key: stage.get().strip()}))
-            staged = stage.get().strip()
-            if not messagebox.askokcancel(head, confirm % ip + ('' if staged else RESTART_NOTE)):
-                return
-            def w():
-                r = do_install_apps_source(need_node(), ip, key, repo, label, stage_dir=staged or None, log=log,
-                                           restart_store=True)
-                return Done(source_done_message(r, label))
-            start(w, done_msg)
-        r = row(c)
-        button(r, 'Make it available', go, style='Accent.TButton')
-        button(r, 'Open repository', lambda: _open_url(url))
-        return c
-
-    source_card(r3, 'Community source  ·  unofficial', 'RideTube  ·  YouTube client',
-                'Plays on the car over the car\'s internet; the picture shows only while parked and drops to a '
-                'podcast view (sound only) while driving. GPL-3, by JustAnotherPU; not affiliated with YouTube '
-                'or Google. iDrive 7. Installs the Store first if it is missing (the head unit then restarts once).',
-                RIDETUBE_REPO, 'RideTube (YouTube, unofficial)', 'stage_rt',
-                'RideTube is a source of the car\'s Store now - on the car open Apps > Store to install it.',
-                'Make the RideTube YouTube client available on the car at %s?\n\nUnofficial. Video is parked-only. '
-                'Installs the Store if needed, then adds JustAnotherPU/ridetube to its sources.',
-                'https://github.com/JustAnotherPU/ridetube', padx=(6, 22), wrap=330)
-
-    # ======================================================= 4. More apps (idrive-apps, car-apps)
-    p4 = section('More apps')
-    l4, r4 = two_up(p4)
-    source_card(l4, 'robertnisipeanu / idrive-apps', 'Cluster & HUD maps  ·  Waze on cluster',
-                'The CarPlay / Android Auto map on the instrument cluster and the HUD, plus the cluster renderer '
-                'it needs. idrive-apps is a built-in Store source, so it appears on the car automatically once '
-                'the Store is installed. Offline car: stage to a USB stick, then install from Apps > Store > USB.',
-                IDRIVE_APPS_REPO, 'idrive-apps (robertnisipeanu)', 'stage_idr',
-                'idrive-apps ready - install Waze on cluster from the car Store.',
-                'Make idrive-apps available on the car at %s?\n\nInstalls the Store if needed; needs internet on this PC.',
-                'https://github.com/robertnisipeanu/idrive-apps', padx=(22, 6), wrap=400)
-    source_card(r4, 'IterioDev / car-apps  ·  iDrive 8', 'IterioDev car-apps',
-                'Car Data, Drag Timer, Drive Recorder, eDrive, Fault Codes, Live Adjustments, Overlays, Service and '
-                'Tailscale. Most are iDrive 8 only (Drive Recorder also runs on iDrive 7): set the head unit above '
-                'to an id8 variant. A built-in Store source.',
-                CARAPPS_REPO, 'car-apps (IterioDev, iDrive 8)', 'stage_car',
-                'car-apps ready - install them from the car Store.',
-                'Make IterioDev car-apps available on the car at %s?\n\nMostly iDrive 8 apps. Installs the Store if '
-                'needed; needs internet on this PC.', 'https://github.com/IterioDev/car-apps',
-                licence='Licence: PolyForm Strict 1.0.0 (IterioDev). Nothing from it is copied here; the car installs it from its own repository.',
-                padx=(6, 22), wrap=400)
-
-    # ======================================================= 5. Bimmhacks apps (ours)
-    p5 = section('Bimmhacks apps')
-    l5, r5 = two_up(p5)
-    c5 = card(l5, pady=(0, 10), padx=(22, 6))
-    kicker(c5, 'In-house  ·  developed by us')
-    title(c5, 'Bimmhacks apps')
-    para(c5, 'Bimmhacks Tuner and the Bimmhacks Hello starter already ship in the Apps section. Publish your own '
-             'apps to the GitHub repo below and they install through the on-car Store like every other source: the '
-             'button adds the repo to the Store for you. The Store lists apps once the repo has a published Release '
-             '(the guide walks through building and publishing one).', wrap=400)
-    our_repo = tk.StringVar(value=cfg.get('our_repo', BIMMHACKS_APPS_REPO))
-    stage_our = tk.StringVar(value=cfg.get('stage_our', ''))
-    gg = tk.Frame(c5, bg=PANEL)
-    gg.pack(fill='x', pady=(6, 0))
-    field(gg, 'Source repo', our_repo, width=18, r=0, c=0)
-    field(gg, 'Stage to USB', stage_our, width=18, r=1, c=0)
-    bc = ttk.Button(gg, text='Choose', command=lambda: pick_stage(stage_our))
-    bc.grid(row=1, column=2, sticky='w')
-    buttons.append(bc)
-
-    def on_our():
+    def add_source(repo, label, confirm):
         _, key, ip, _ = conn_values()
-        repo = our_repo.get().strip()
-        save_config(dict(load_config(), our_repo=repo, stage_our=stage_our.get().strip()))
-        if not repo:
-            messagebox.showinfo('Bimmhacks apps', 'No repository set yet.\n\nEnter your own GitHub "owner/repo" of '
-                                'packaged apps once it is published, then install.')
+        if not re.match(r'^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$', repo or ''):
+            messagebox.showwarning('Add source', 'Enter the source as owner/repo, e.g. JustAnotherPU/ridetube.')
             return
-        if not re.match(r'^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$', repo):
-            messagebox.showwarning('Bimmhacks apps', 'Enter the source as owner/repo, e.g. bimmhacks/apps.')
-            return
-        staged = stage_our.get().strip()
-        if not messagebox.askokcancel('Bimmhacks apps', 'Make %s available on the car at %s?%s' % (repo, ip, '' if staged else RESTART_NOTE)):
+        if not messagebox.askokcancel('Add source', confirm % ip + RESTART_NOTE):
             return
         def w():
-            r = do_install_apps_source(need_node(), ip, key, repo, 'Bimmhacks Apps', stage_dir=staged or None, log=log,
-                                       restart_store=True)
-            return Done(source_done_message(r, 'Bimmhacks Apps'))
-        start(w, 'Bimmhacks apps are a source of the car\'s Store now - install them from Apps > Store on the car.')
-    ob = row(c5, pady=(8, 2))
-    button(ob, 'Make our apps available', on_our, style='Accent.TButton')
-    ob2 = row(c5, pady=(0, 12))
-    button(ob2, 'How to make an app', lambda: _open_path(APP_GUIDE))
-    button(ob2, 'Open our repo', lambda: _open_url('https://github.com/' + (our_repo.get().strip() or BIMMHACKS_APPS_REPO)))
+            r = do_install_apps_source(need_node(), ip, key, repo, label, log=log, restart_store=True)
+            return Done(source_done_message(r, label))
+        start(w, 'Source added - open Apps > Store on the car.')
 
-    c5b = card(r5, pady=(0, 10), padx=(6, 22))
-    kicker(c5b, 'Tuner  ·  PIDs from a capture')
-    title(c5b, 'Which identifiers does a logger read?')
-    para(c5b, 'Record the ENET link with Wireshark while a logger (MHD, BM3, ISTA ...) runs on your own car, then '
-              'pick the .pcap here. You get a report of every identifier it asked the car for, and a '
-              'custom_pids.json for Bimmhacks Tuner that logs the same ones raw. The root tool\'s own session '
-              'logs work too. The report appears in the activity log below.', wrap=400)
+    rt = row(c2b, pady=(4, 2))
+    button(rt, 'Add RideTube (YouTube, unofficial)', lambda: add_source(
+        RIDETUBE_REPO, 'RideTube (YouTube, unofficial)',
+        'Make the RideTube YouTube client available on the car at %s?\n\nUnofficial, GPL-3; video is parked-only.'),
+        style='Accent.TButton')
+    our_repo = tk.StringVar(value=cfg.get('our_repo', BIMMHACKS_APPS_REPO))
+    orr = row(c2b, pady=(8, 2))
+    ttk.Label(orr, text='Your repo', style='Muted.TLabel').pack(side='left', padx=(4, 8))
+    ttk.Entry(orr, textvariable=our_repo, width=6).pack(side='left', fill='x', expand=True, padx=(0, 6))
 
-    def on_capture():
-        p = filedialog.askopenfilename(title='A Wireshark capture of the ENET link, or a root-tool session log',
-                                       filetypes=[('Captures and logs', '*.pcap *.pcapng *.cap *.log *.txt'), ('All files', '*.*')])
-        if not p:
-            return
-        start(lambda: do_pid_capture(p, log=log), 'Capture analysed - see the activity log; the files are next to the capture.')
-    cr = row(c5b)
-    button(cr, 'Analyse a capture', on_capture)
+    def on_our():
+        repo = our_repo.get().strip()
+        save_config(dict(load_config(), our_repo=repo))
+        add_source(repo, 'your apps (%s)' % repo, 'Make %s available on the car at ' % repo + '%s?')
+    orr2 = row(c2b, pady=(0, 2))
+    button(orr2, 'Add your repo to the Store', on_our)
+    orr3 = row(c2b, pady=(0, 12))
+    button(orr3, 'How to publish an app', lambda: _open_path(APP_GUIDE))
 
-    # ======================================================= 6. Credits
-    p6 = section('Credits')
-    c6 = card(p6, pady=(10, 10))
-    kicker(c6, 'Credits & licences')
-    title(c6, 'Built on open-source work')
-    tbl = tk.Frame(c6, bg=PANEL)
+    # ======================================================= 3. Credits
+    p3 = section('Credits')
+    c3 = card(p3, pady=(10, 10))
+    kicker(c3, 'Credits & licences')
+    title(c3, 'Built on open-source work')
+    tbl = tk.Frame(c3, bg=PANEL)
     tbl.pack(fill='x', padx=18, pady=(4, 6))
     for i, (what, who) in enumerate(CREDITS):
         ttk.Label(tbl, text=what).grid(row=i, column=0, sticky='w', pady=2)
         ttk.Label(tbl, text=who, style='Muted.TLabel').grid(row=i, column=1, sticky='w', padx=(24, 0), pady=2)
-    para(c6, 'These apps are free and open source. Charge for installation and support, credit the original '
-             'authors, and tell clients the apps themselves are free. BMW\'s app SDK is never shipped: it is read '
-             'from the client\'s own car and deleted from the PC afterwards.')
-    cb = row(c6)
+    para(c3, 'The apps and tools are free and open source. Charge for the install and support, credit the '
+             'original authors, and tell clients the apps themselves are free. This tool installs the on-car '
+             'Store and enables root; the apps come from the Store, from their authors\' own repositories.')
+    cb = row(c3)
     button(cb, 'idrive7-apps', lambda: _open_url('https://github.com/cauliflowermossgrape/idrive7-apps'))
     button(cb, 'ssh-root tool', lambda: _open_url('https://github.com/cauliflowermossgrape/idrive7-8-ssh-root'))
     button(cb, 'mgu-store', lambda: _open_url('https://github.com/robertnisipeanu/mgu-store'))
@@ -1618,7 +1353,7 @@ def run_gui():
     logbox.pack(fill='both', expand=True, padx=(18, 0), pady=(0, 10))
     foot = tk.Frame(body, bg=BG)
     foot.pack(fill='x', padx=22, pady=(0, 10))
-    tk.Label(foot, text='Bimmhacks by Mr. Wali  ·  apps by cauliflowermossgrape (MIT)  ·  Store by Robert Nisipeanu & IterioDev (GPL-3.0)',
+    tk.Label(foot, text='Bimmhacks by Mr. Wali  ·  root tool & apps: cauliflowermossgrape  ·  Store by Robert Nisipeanu & IterioDev (GPL-3.0)',
              bg=BG, fg=MUTED, font=font(9)).pack(side='left')
 
     chip_colors = {'neutral': (CHIP_BG, MUTED), 'good': (GOOD_SOFT, GOOD), 'warn': (WARN_SOFT, WARN)}
@@ -1651,8 +1386,8 @@ def run_gui():
         root.after(100, pump)
 
     show(0)
-    log('Bimmhacks MGU Flash & App Studio  v%s  ·  %d apps  ·  %s' % (VERSION, len(apps), ', '.join(langs)))
-    log('Work through the sections left to right: root access once per car, then the apps, then the on-car Store.')
+    log('Bimmhacks MGU Tool  v%s  ·  root access, coding backup & the on-car App Store for BMW iDrive 7 / 8' % VERSION)
+    log('Root access once per car (back up the coding first), then install the on-car Store; apps install from the Store.')
     root.after(100, pump)
     root.mainloop()
 
@@ -1688,34 +1423,35 @@ ROOT_ACTIONS = {'root-status': 'status', 'root-flash': 'flash', 'root-enable': '
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description='Bimmhacks MGU Flash & App Studio (iDrive 7 & 8)')
+    ap = argparse.ArgumentParser(description='Bimmhacks MGU Tool - root access, coding backup, App Store (iDrive 7 & 8)')
     ap.add_argument('action', nargs='?', default='gui',
-                    choices=['gui', 'install', 'test', 'status', 'restore', 'apps',
+                    choices=['gui',
                              'root-status', 'root-flash', 'root-enable', 'root-fix-key', 'root-disable',
-                             'detect-vin', 'backup-coding', 'store-install', 'restart-head-unit',
-                             'install-idrive-apps', 'install-car-apps', 'install-ridetube',
-                             'install-our-apps', 'usb-repo'])
-    ap.add_argument('apps', nargs='*', help='app ids for install (default: all non-experimental apps)')
+                             'detect-vin', 'backup-coding', 'verify-coding', 'restore-coding',
+                             'test', 'store-install', 'restart-head-unit',
+                             'install-ridetube', 'install-idrive-apps', 'install-car-apps', 'install-our-apps',
+                             'usb-repo', 'pid-capture'])
     ap.add_argument('--key', help='root SSH private key (id_rsa from the root-access step)')
     ap.add_argument('--ip', help='head unit address (default: from connect.txt next to the key, else %s)' % DEFAULT_IP)
     ap.add_argument('--vin', help='17-char VIN (required for root-flash / root-fix-key)')
     ap.add_argument('--arch', default='id7', choices=ARCHES, help='head-unit variant (default: id7)')
     ap.add_argument('--gateway', default='auto', help="ENET gateway address, or 'auto' (default)")
-    ap.add_argument('--language', default='en')
-    ap.add_argument('--out', help='backup-coding: folder to write the coding snapshot into')
+    ap.add_argument('--out', help='backup-coding / pid-capture: folder to write into')
+    ap.add_argument('--backup', help='verify-coding / restore-coding: the coding backup .json to use')
+    ap.add_argument('--capture', help='pid-capture: a Wireshark .pcap/.pcapng of the ENET link, or a root-tool log')
     ap.add_argument('--confirm-backup', action='store_true',
-                    help='root-flash / root-fix-key: I have saved the coding (BimmerCode / E-Sys) and accept that a flash wipes it')
+                    help='root-flash / root-fix-key: I have saved the coding and accept that a flash wipes it')
+    ap.add_argument('--no-ncd', action='store_true', help='backup-coding: snapshot only, do not read the coding data')
+    ap.add_argument('--dry-run', action='store_true', help='restore-coding: show what would be written, write nothing')
+    ap.add_argument('--confirm-restore', action='store_true',
+                    help='restore-coding: I accept this is experimental and can leave the HMI partly-coded, E-Sys/Autel ready')
     ap.add_argument('--repo', help='install-our-apps / usb-repo: a GitHub owner/repo source')
-    ap.add_argument('--stage', help='install-*-apps: also stage the apps to this folder / USB for offline install')
-    ap.add_argument('--no-reboot', action='store_true', help='do not reboot the unit at the end (controller gate loads at the next start)')
-    ap.add_argument('--no-controller-gate', action='store_true', help='do not install the controller gate (Doom)')
+    ap.add_argument('--stage', help='install-*-apps / usb-repo: stage the apps to this folder / USB for offline install')
     ap.add_argument('--no-renderer', action='store_true', help='store-install: leave out the renderer')
     ap.add_argument('--no-uplink', action='store_true', help='store-install: leave out the internet uplink')
     ap.add_argument('--restart', action='store_true',
-                    help='store-install / install-ridetube / install-our-apps ...: restart the head unit when the '
-                         'Store needs it (and wait for it to come back)')
+                    help='store-install / install-*: restart the head unit when the Store needs it (and wait for it)')
     ap.add_argument('--no-wait', action='store_true', help='restart-head-unit: do not wait for the unit to come back')
-    ap.add_argument('--keep-build', action='store_true', help="keep oap-sdk/ and dist/ after installing (contain BMW's SDK)")
     a = ap.parse_args(argv)
 
     def log(m):
@@ -1725,16 +1461,11 @@ def main(argv=None):
         import importlib.util
         if importlib.util.find_spec('tkinter') is None:
             sys.exit('No Tk (window toolkit) in this Python. Use the command line, e.g.:\n'
-                     '  python bimmhacks_installer.py install --key path/to/id_rsa')
+                     '  python bimmhacks_installer.py store-install --key path/to/id_rsa')
         return run_gui()
-    if a.action == 'apps':
-        for aid, title, desc, exp in list_apps():
-            print('%-18s %-22s %s' % (aid, title, '(experimental: %s)' % exp if exp else ''))
-        print('languages: ' + ', '.join(list_languages()))
-        return
 
     try:
-        # root-access actions and detect-vin don't need Node or an existing key
+        # root access and the coding tools reach the car over ENET; they need neither Node nor an existing key
         if a.action in ROOT_ACTIONS:
             do_root(ROOT_ACTIONS[a.action], log, vin=a.vin, ip=a.ip, gateway=a.gateway, arch=a.arch,
                     backup_confirmed=a.confirm_backup)
@@ -1744,11 +1475,25 @@ def main(argv=None):
             print('VIN: ' + vin if vin else 'VIN not detected (is the ENET cable in and the car awake?)')
             return
         if a.action == 'backup-coding':
-            do_backup_coding(log, vin=a.vin, ip=a.ip, gateway=a.gateway, arch=a.arch, out_dir=a.out)
+            do_backup_coding(log, vin=a.vin, ip=a.ip, gateway=a.gateway, arch=a.arch, out_dir=a.out, no_ncd=a.no_ncd)
+            return
+        if a.action == 'verify-coding':
+            bk = a.backup or latest_coding_backup(a.out, a.vin)
+            ok = do_verify_coding(log, bk, ip=a.ip, gateway=a.gateway, arch=a.arch)
+            sys.exit(0 if ok else 1)
+        if a.action == 'restore-coding':
+            bk = a.backup or latest_coding_backup(a.out, a.vin)
+            do_restore_coding(log, bk, ip=a.ip, gateway=a.gateway, arch=a.arch,
+                              dry_run=a.dry_run, confirm=a.confirm_restore)
+            return
+        if a.action == 'pid-capture':
+            cap = a.capture or a.repo
+            if not cap:
+                ap.error('--capture <file> is needed')
+            do_pid_capture(cap, log=log, out_dir=a.out)
             return
 
         if a.action == 'usb-repo':
-            # staging to a folder needs only Node (no car, no ssh)
             node = find_node()
             if not node:
                 raise InstallerError('Node.js is not installed: get the LTS version from https://nodejs.org/')
@@ -1757,7 +1502,12 @@ def main(argv=None):
             do_usb_repo(node, a.stage, (['github:' + a.repo] if a.repo else []), log=log)
             return
 
-        node, ssh = preflight(log)
+        node, ssh = preflight(log, need_ssh=(a.action in ('test', 'store-install', 'restart-head-unit')))
+        if a.action == 'test':
+            if not a.key:
+                ap.error('--key is needed')
+            do_test_connection(ssh, a.ip or ip_from_key(a.key) or DEFAULT_IP, a.key, log=log)
+            return
         if a.action == 'store-install':
             if not a.key:
                 ap.error('--key is needed')
@@ -1781,35 +1531,20 @@ def main(argv=None):
             elif a.action == 'install-ridetube':
                 repo, label = RIDETUBE_REPO, 'RideTube (YouTube, unofficial)'
             else:
-                repo, label = a.repo or BIMMHACKS_APPS_REPO, 'Bimmhacks Apps'
+                repo, label = a.repo or BIMMHACKS_APPS_REPO, 'your apps'
                 if not repo:
-                    raise InstallerError('No "our apps" repository set. Pass --repo owner/repo, or set '
-                                         'BIMMHACKS_APPS_REPO.')
+                    raise InstallerError('No "our apps" repository set. Pass --repo owner/repo.')
             result = do_install_apps_source(node, ip2, a.key, repo, label, stage_dir=a.stage, log=log,
                                             restart_store=a.restart)
             log(source_done_message(result, label))
             if result in ('pending', 'slow'):
-                sys.exit(3)         # not a failure, not done: the Store's updater starts with the head unit
+                sys.exit(3)
             return
-
-        if not a.key:
-            ap.error('--key is needed')
-        ip = a.ip or ip_from_key(a.key) or DEFAULT_IP
-        if a.action == 'install':
-            known = [x[0] for x in list_apps()]
-            apps = a.apps or [x for x in known if x not in EXPERIMENTAL]
-            bad = [x for x in apps if x not in known]
-            if bad:
-                raise InstallerError('Unknown app(s): %s. Known: %s' % (' '.join(bad), ' '.join(known)))
-            if a.language not in list_languages():
-                raise InstallerError('Unknown language %s. Known: %s' % (a.language, ' '.join(list_languages())))
-            do_install(ssh, node, ip, a.key, apps, a.language, reboot=not a.no_reboot,
-                       controller_gate=not a.no_controller_gate, keep_build=a.keep_build, log=log)
-        else:
-            do_simple(ssh, ip, a.key, a.action, log)
+        ap.error('unknown action %s' % a.action)
     except InstallerError as e:
         print('ERROR: ' + str(e), file=sys.stderr)
         sys.exit(1)
+
 
 
 if __name__ == '__main__':

@@ -50,12 +50,23 @@ def svk_record(t, version, a, b, c):
 class FakeCar:
     CHALLENGE = '00112233445566778899AABBCCDDEEFF' * 2
 
+    # the per-coding-block NCD store, keyed by block index (the i-th CAFD in the SVK). Read with
+    # 22 F5A0+i, written with 2E F5A0+i - the mechanism installer/coding_backup.py uses. Default: a
+    # little coding data for each CAFD so backup->restore round-trips.
+    NCD_BASE = 0xF5A0
+
     def __init__(self, vin='WBA12345678901234', svk=None, dtcs=None, mgu_ip='169.254.36.47',
-                 host='127.0.0.1', tcp_port=6801, udp_port=6811, ssh_port=None, debug_on=True):
+                 host='127.0.0.1', tcp_port=6801, udp_port=6811, ssh_port=None, debug_on=True,
+                 ncd=None, coding_write=True):
         self.vin = vin
         self.svk = DEFAULT_SVK if svk is None else svk
         self.dtcs = [('480A01', 0x09)] if dtcs is None else list(dtcs)
         self.debug_on = debug_on                  # the B7F8E5 DTC is reported while this is on
+        self.coding_write = coding_write          # False: the unit refuses coding writes (NRC 0x33)
+        if ncd is None:
+            cafds = [r for r in self.svk if r[0] == 5]
+            ncd = {i: bytes([0x10 + i] + [0xA0 + i, 0x00, i, 0xFF]) for i in range(len(cafds))}
+        self.ncd = dict(ncd)
         self.mgu_ip = mgu_ip
         self.host, self.tcp_port, self.udp_port, self.ssh_port = host, tcp_port, udp_port, ssh_port
         self.requests = []
@@ -138,6 +149,18 @@ class FakeCar:
             return b'\x71\x02\xA0\xFD'
         if payload[:4] == b'\x31\x03\xA0\xFD':
             return b'\x71\x03\xA0\xFD' + (b'\x00' if self.debug_on else b'\x01')
+        if sid == 0x22 and len(payload) == 3 and (payload[1] << 8 | payload[2]) >= self.NCD_BASE:
+            idx = (payload[1] << 8 | payload[2]) - self.NCD_BASE     # read a coding block (NCD)
+            if idx in self.ncd:
+                return bytes((0x62, payload[1], payload[2])) + self.ncd[idx]
+            return bytes((0x7F, 0x22, 0x31))                  # requestOutOfRange
+        if sid == 0x2E and len(payload) >= 3 and (payload[1] << 8 | payload[2]) >= self.NCD_BASE:
+            idx = (payload[1] << 8 | payload[2]) - self.NCD_BASE     # write a coding block (NCD)
+            if not self.coding_write:
+                return bytes((0x7F, 0x2E, 0x33))              # securityAccessDenied
+            if self.coding_write != 'lie':                   # 'lie': reply OK but do not store (read-back differs)
+                self.ncd[idx] = bytes(payload[3:])
+            return bytes((0x6E, payload[1], payload[2]))
         if sid == 0x10 and len(payload) >= 2:
             return bytes((0x50, payload[1], 0x00, 0x32, 0x01, 0xF4))
         if sid == 0x3E:

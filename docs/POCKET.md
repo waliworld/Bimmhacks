@@ -28,7 +28,8 @@ installer, the same safety gates — and the phone is only the screen.
 
 1. Flash Raspberry Pi OS Lite to the card (Raspberry Pi Imager: set a user, enable SSH, and join your
    Wi-Fi so the box has internet for this step).
-2. Copy the client zip onto the box and unzip it, e.g. to `/home/pi/Bimmhacks`.
+2. Copy the Pocket zip (`Bimmhacks-Pocket-x.y.z.zip`) onto the box and unzip it, e.g. to
+   `/home/pi/Bimmhacks`.
 3. Run the set-up script as root:
 
    ```sh

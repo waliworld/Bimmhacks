@@ -100,11 +100,6 @@ class FlashNeedsBackupConfirmation(unittest.TestCase):
 
 
 class OtherGuards(unittest.TestCase):
-    def test_unknown_app_and_language_are_refused(self):
-        r = cli('install', '--key', os.path.join(HERE, 'fake_enet.py'), 'no_such_app')
-        self.assertEqual(r.returncode, 1)
-        self.assertIn('Unknown app', r.stderr)
-
     def test_store_actions_need_a_key_or_a_stage_folder(self):
         for action in ('store-install', 'install-idrive-apps', 'install-car-apps', 'install-ridetube'):
             r = cli(action)
@@ -119,9 +114,6 @@ class OtherGuards(unittest.TestCase):
         r = cli('test', '--key', os.path.join(HERE, 'fake_enet.py'), '--ip', '1.2.3.4;reboot')
         self.assertEqual(r.returncode, 1)
         self.assertIn('valid head unit address', r.stderr)
-
-    def test_the_tuner_is_listed_experimental(self):
-        self.assertIn('bimmhacks_tuner', bi.EXPERIMENTAL)
 
 
 if __name__ == '__main__':

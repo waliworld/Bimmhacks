@@ -100,7 +100,6 @@ class InstallerChildren(unittest.TestCase):
         subprocess.Popen = Proc
         bi.ensure_cryptography = lambda log, install=True: None
         calls = [
-            lambda: bi.build_kit('node', ['bimmhacks_hello'], 'en', lambda m: None),
             lambda: bi.run_ssh_root('status', lambda m: None),
             lambda: bi.do_backup_coding(lambda m: None, out_dir=tempfile.gettempdir()),
             lambda: bi.do_store_install('node', '127.0.0.1', key.name, log=lambda m: None),
