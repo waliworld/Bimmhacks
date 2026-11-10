@@ -22,8 +22,8 @@ SRC = os.path.join(REPO, 'docs', 'store-sources.json')
 OUT = os.path.join(REPO, 'docs', 'Store-Sources.pdf')
 
 # sources the Store already lists out of the box (tools/mgu-store/sources.json): never repeat these
-BUILTIN_SHOWN = ['cauliflowermossgrape/idrive7-apps', 'robertnisipeanu/idrive-apps', 'IterioDev/car-apps']
-BUILTIN = {b.lower() for b in BUILTIN_SHOWN + ['robertnisipeanu/mgu-store']}
+BUILTIN = {b.lower() for b in ['cauliflowermossgrape/idrive7-apps', 'robertnisipeanu/idrive-apps',
+                               'IterioDev/car-apps', 'robertnisipeanu/mgu-store']}
 GROUPS = [('7+8', 'iDrive 7 & iDrive 8'), ('7', 'iDrive 7 only'), ('8', 'iDrive 8 only')]
 
 
@@ -56,6 +56,8 @@ def build():
     SUB = ParagraphStyle('SUB', parent=ss['Normal'], fontSize=9.5, textColor=muted, leading=13)
     H2 = ParagraphStyle('H2', parent=ss['Heading2'], fontName='Helvetica-Bold', fontSize=14, textColor=accent,
                         spaceBefore=14, spaceAfter=6)
+    H3 = ParagraphStyle('H3', parent=ss['Heading3'], fontName='Helvetica-Bold', fontSize=11, textColor=ink,
+                        spaceBefore=10, spaceAfter=5, backColor=colors.HexColor('#eef3fb'), borderPadding=(3, 4, 3, 4))
     NAME = ParagraphStyle('NAME', parent=ss['Normal'], fontName='Helvetica-Bold', fontSize=11.5, textColor=ink,
                           spaceAfter=1)
     BODY = ParagraphStyle('BODY', parent=ss['Normal'], fontSize=9.5, textColor=ink, leading=13)
@@ -90,14 +92,31 @@ def build():
               Paragraph('<b>iDrive 8:</b> typing on the car only works while the Store\'s renderer draws the '
                         'screen. If the keyboard does not come up, add the source from the Store\'s phone page or '
                         'from the computer (Bimmhacks MGU Tool &rarr; App Store &rarr; <i>Add your repo to the '
-                        'Store</i>). Already in the Store, nothing to add: '
-                        + ', '.join(BUILTIN_SHOWN) + '.', SUB)]
+                        'Store</i>).', SUB)]
 
+    builtin = data.get('builtin', [])
+    if builtin:
+        story.append(Paragraph('Already in the Store (nothing to type)', H2))
+        story.append(Paragraph('These sources ship with the Store, so you do not add them &mdash; they are here so '
+                               'you can tell them apart from the similarly-named repos below, and read each one.', SUB))
+        story.append(Spacer(1, 6))
+        for e in builtin:
+            url = 'https://github.com/' + e['repo']
+            story.append(KeepTogether([
+                Paragraph('%s <font size="8.5" color="#5b6573">&middot; %s</font>' % (e['name'], e['idrive']), NAME),
+                Paragraph(e['description'], BODY),
+                Paragraph('Built-in source: <font face="Courier-Bold">%s</font> (follow %s)' % (e['repo'], e['follow']),
+                          LABEL),
+                Paragraph('Repo on your PC: <link href="%s" color="#1f5fd6">%s</link>' % (url, url), LINK),
+                Spacer(1, 10)]))
+
+    story.append(Paragraph('Add these from the car', H2))
+    story.append(Paragraph('Not bundled with the Store &mdash; add each one as shown.', SUB))
     for key, title in GROUPS:
         group = [e for e in entries if e['idrive'] == key]
         if not group:
             continue
-        story.append(Paragraph(title, H2))
+        story.append(Paragraph(title, H3))
         for e in group:
             url = 'https://github.com/' + e['repo']
             block = [Paragraph(e['name'], NAME),
