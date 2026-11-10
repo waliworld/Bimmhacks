@@ -119,6 +119,11 @@ The right-hand card adds sources to the on-car Store:
 If the Store has not started yet, the head unit is restarted once for you (about two minutes) and the
 installer waits for the Store's updater before it adds a source.
 
+**More app repos:** `docs/Store-Sources.pdf` (in this zip) lists the recommended app repos that do
+**not** come with the Store, grouped by **iDrive 7 & 8 / iDrive 7 only**. For each one it gives the
+exact text to type on the car (**Apps → Store → Settings → Add source**), what to follow (Releases or a
+branch), and the repo's link so you can read about it on your PC.
+
 > **First time on a car?** A Store that was installed a minute ago only starts its updater with the
 > head unit. If the installer says *the Store's updater is not running yet*, restart the head unit
 > (car **Settings**, or power-cycle), wait a minute, and click the button again.

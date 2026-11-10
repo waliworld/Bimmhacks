@@ -50,8 +50,9 @@ jobs:
           ! unzip -l dist/*.zip | grep -E 'oap-sdk/|\.mgu$|/enrollments/|/id_rsa( |$)'
       - name: Check the PC/Pocket split is clean
         run: |
-          # the PC installer carries none of the Pocket box code
+          # the PC installer carries none of the Pocket box code, and does carry the Store-sources PDF
           ! unzip -l dist/Bimmhacks-MGU-Installer-*.zip | grep -iE 'pocket'
+          unzip -l dist/Bimmhacks-MGU-Installer-*.zip | grep -q 'docs/Store-Sources.pdf'
           # the Pocket box carries the server, its page and its guide
           unzip -l dist/Bimmhacks-Pocket-*.zip | grep -q 'installer/pocket_server.py'
           unzip -l dist/Bimmhacks-Pocket-*.zip | grep -q 'installer/pocket/index.html'

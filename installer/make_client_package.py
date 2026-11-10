@@ -30,7 +30,8 @@ TREES = ['installer', 'tools']
 
 # the desktop app: PC launchers + the general docs, but NOT the Pocket guide.
 PC_TOP_FILES = ['Install Bimmhacks Apps.cmd', 'Install Bimmhacks Apps.command', 'install.sh',
-                'README.md', 'CLIENT-GUIDE.md', 'UPSTREAM.md', 'docs/MAKE-YOUR-OWN-APP.md']
+                'README.md', 'CLIENT-GUIDE.md', 'UPSTREAM.md', 'docs/MAKE-YOUR-OWN-APP.md',
+                'docs/Store-Sources.pdf']
 # the box: no desktop double-click launchers (it is headless and set up over SSH); the Pocket guide leads.
 POCKET_TOP_FILES = ['README.md', 'UPSTREAM.md', 'docs/POCKET.md', 'docs/MAKE-YOUR-OWN-APP.md']
 

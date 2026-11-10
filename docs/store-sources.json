@@ -1,0 +1,105 @@
+{
+  "updated": "2026-11-10, from github.com/stars/waliworld/lists/bmw-app-repos",
+  "sources": [
+    {
+      "repo": "waliworld/iDrive8-RideTube",
+      "name": "RideTube for iDrive 8 (beta)",
+      "description": "RideTube, the unofficial YouTube client, ported to iDrive 8 (beta, not yet confirmed on an iDrive 8 car); video plays only while parked.",
+      "idrive": "7+8",
+      "follow": "Releases"
+    },
+    {
+      "repo": "alexp50/bmw-apps",
+      "name": "alexp50 BMW Apps",
+      "description": "Fifteen full-screen apps, including Ambient Studio, DPF Monitor, Drive HUD, Telemetry Studio, Waze HUD and xDrive Studio.",
+      "idrive": "7",
+      "follow": "Releases"
+    },
+    {
+      "repo": "JustAnotherPU/mgu-apps",
+      "name": "JustAnotherPU MGU Apps",
+      "description": "Head-unit tools: iDrive Monitor (system monitor), wireproxy (for Tailscale) and Node.js 22.",
+      "idrive": "7",
+      "follow": "Releases"
+    },
+    {
+      "repo": "JustAnotherPU/waze-hud",
+      "name": "Waze HUD",
+      "description": "Waze turn-by-turn arrows from CarPlay on the HUD and instrument cluster; it uses cluster-render from the built-in idrive-apps source.",
+      "idrive": "7",
+      "follow": "Releases"
+    },
+    {
+      "repo": "bimmer-lab/apps",
+      "name": "bimmer-lab Apps",
+      "description": "Cluster Themes (redraws the instrument cluster) and HUD Widgets (custom HUD readouts); install cluster-render from the built-in idrive-apps source first.",
+      "idrive": "7",
+      "follow": "Branch: main"
+    },
+    {
+      "repo": "pinguinooo/idrive7-apps",
+      "name": "pinguinooo iDrive 7 Apps",
+      "description": "Shift Lights, Engine Vitals and an M Track cluster layout.",
+      "idrive": "7",
+      "follow": "Branch: main"
+    },
+    {
+      "repo": "hexlay/idrive7-custom-apps",
+      "name": "hexlay Custom Apps",
+      "description": "A Spotify Connect controller and library browser, and M-Copilot, an AI assistant that reads vehicle data; the renderer comes from the built-in idrive7-apps source.",
+      "idrive": "7",
+      "follow": "Branch: main"
+    },
+    {
+      "repo": "eroobeeroo/idrive7-cluster-info",
+      "name": "Cluster Info, Layouts & Centre (eroobeeroo)",
+      "description": "Three apps that put live data and custom layouts on the instrument cluster and HUD; the head unit builds them from source.",
+      "idrive": "7",
+      "follow": "Branch: main",
+      "also": [
+        {"repo": "eroobeeroo/idrive7-apps", "follow": "Branch: main", "why": "the shared parts these apps build on"}
+      ]
+    },
+    {
+      "repo": "leonit-k/idrive7-cluster",
+      "name": "iDrive 7 Cluster Apps (leonit-k)",
+      "description": "The same three cluster apps (Cluster Info, Cluster Layouts, Cluster Centre) as eroobeeroo's repo above; you only need one of the two.",
+      "idrive": "7",
+      "follow": "Branch: main",
+      "also": [
+        {"repo": "eroobeeroo/idrive7-apps", "follow": "Branch: main", "why": "the shared parts these apps build on"},
+        {"repo": "eroobeeroo/idrive-apps", "follow": "Releases", "why": "the HUD / map-layout additions to Waze on cluster"}
+      ]
+    },
+    {
+      "repo": "IterioDev/car-apps",
+      "name": "IterioDev car-apps",
+      "description": "Built into the Store already.",
+      "idrive": "8",
+      "follow": "Tags"
+    }
+  ],
+  "not_sources": [
+    {
+      "repo": "gavincunningham2003-dot/bmw",
+      "name": "BMW Ambient RGB Controller",
+      "idrive": "iDrive 7",
+      "description": "Gives a G20's factory ambient lighting any colour: hue ring, brightness, upper and lower zones, animated modes.",
+      "why": "built with the MGU App Kit and not published as a Store source; build and install it yourself from the repo."
+    },
+    {
+      "repo": "JustAnotherPU/mgu-store",
+      "name": "MGU App Store (JustAnotherPU fork)",
+      "idrive": "iDrive 7 & 8",
+      "description": "A fork of the MGU App Store itself.",
+      "why": "it is the Store, not a list of apps; the Bimmhacks MGU Tool installs the Store for you (App Store tab)."
+    },
+    {
+      "repo": "inotbarnacle/ID6_apps_prerelease",
+      "name": "NBT Evo ID6 apps (pre-release)",
+      "idrive": "iDrive 6 (NBT Evo)",
+      "description": "BoostDeck, ShiftDeck and MHD Maps menus built for NBT Evo head units over ENET.",
+      "why": "made for the older NBT Evo (iDrive 6) unit, not the MGU; it does not run on iDrive 7 or 8."
+    }
+  ]
+}

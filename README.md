@@ -84,6 +84,7 @@ backup — from this tool, BimmerCode, E-Sys or Autel.
 | `tools/mgu-store/` | the on-car App Store installer (`mgu-install.js`, GPL-3.0) |
 | `idrive7-apps/` | app sources & tools (not shipped in either zip — apps install from the on-car Store) |
 | [CLIENT-GUIDE.md](CLIENT-GUIDE.md) | step-by-step guide for clients (goes into the PC zip) |
+| [docs/Store-Sources.pdf](docs/Store-Sources.pdf) | recommended app repos not bundled with the Store: the exact text to add each on the car, by iDrive 7 / 8, with links (PC zip). Built from `docs/store-sources.json` by `installer/make_store_sources_pdf.py` |
 
 ## Making the packages for clients
 
