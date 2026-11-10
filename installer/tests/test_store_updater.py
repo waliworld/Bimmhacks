@@ -190,6 +190,16 @@ class ScriptAgainstTheRealUpdater(unittest.TestCase):
         self.assertIn('WAITING: ', out[-1])
         self.assertIn('no updater secret', out[-1])
 
+    def test_the_wait_option_is_accepted_and_does_not_slow_a_ready_updater(self):
+        # the installer passes --wait=150 after a head-unit restart: a ready updater still answers at once
+        import time
+        t0 = time.time()
+        rc, out = self.up.run_script('JustAnotherPU/ridetube', 'releases', '--wait=150')
+        self.assertEqual((rc, out[-1]), (0, 'ADDED JustAnotherPU/ridetube (releases)'), out)
+        self.assertLess(time.time() - t0, 20)
+        rc, out = self.up.run_script('o/r', 'releases', os.path.join(self.up.work, 'nothing.sock'), '--wait=1')
+        self.assertEqual(rc, 3, out)            # one second of waiting, then WAITING (not a hang)
+
     def test_the_secret_is_found_without_the_registry_entry(self):
         os.remove(os.path.join(self.up.oap, 'oap_12201', 'data', 'apps', 'robertn_store.json'))
         rc, out = self.up.run_script('JustAnotherPU/ridetube', 'releases')
@@ -231,6 +241,15 @@ class InstallerThroughFakeSsh(unittest.TestCase):
         with FakeSsh():
             self.assertEqual(bi.do_install_apps_source('node', '127.0.0.1', self.key, bi.RIDETUBE_REPO, 'RideTube',
                                                        log=self.lines.append), 'already')
+
+    def test_the_installer_waits_longer_after_a_restart(self):
+        with FakeSsh():
+            car = bi.Car(shutil.which('ssh'), '127.0.0.1', self.key, log=self.lines.append)
+            try:
+                self.assertEqual(bi.add_store_source(car, bi.RIDETUBE_REPO, 'releases', log=self.lines.append, wait_s=150), 'added')
+            finally:
+                car.close()
+        self.assertEqual(self.up.sources()[-1]['repo'], bi.RIDETUBE_REPO)
 
     def test_a_store_whose_updater_is_not_up_yet_is_pending_not_an_error(self):
         os.environ['MGU_UPDATER_SOCKET'] = os.path.join(self.up.work, 'nothing.sock')

@@ -79,17 +79,34 @@ then restore them with BimmerCode or E-Sys.
 ### App Store
 
 Installs the on-car **MGU App Store**, so you browse, install and update apps from the car screen
-afterwards (**Apps → Store**). The car needs internet for this (see above).
+afterwards (**Apps → Store**). The car needs internet for this (see above). Three options sit above the
+button, all ticked by default:
 
-1. Make sure the car has internet, then click **Install the App Store**.
-2. When it finishes, restart the head unit (car **Settings**, or power-cycle) to see the Store tile.
+- **Renderer** — the graphics part. It draws the Store and other apps with the head unit's graphics
+  chip, so they are smooth and get the on-screen keyboard. Without it the Store falls back to simpler
+  screens. Leave it ticked.
+- **Internet uplink** — gives the car its own internet through a USB Ethernet adapter, an LTE stick,
+  phone tethering (an Android phone on USB, or an iPhone's Personal Hotspot) or Wi-Fi, so the Store can
+  download apps. Untick it only if you will install from a USB stick and never need the car online.
+- **Restart the head unit when done** — the Store only starts after a restart (about two minutes: the
+  screens go dark, and the installer waits until the car is back). Leave it ticked.
+
+1. Park the car, ignition on, then click **Install the App Store** and confirm.
+2. The installer installs the Store, restarts the head unit and waits for it to come back. Then open
+   **Apps → Store** on the car.
+
+Unticked the restart box? Click **Restart head unit** next to the install button when you are ready.
+It asks the car to restart exactly as the Store's own *Restart head unit* does, and refuses while a
+Store install is still running. (The Store's own button cannot help here: on a freshly installed Store
+it is the thing that has not started yet.)
 
 **RideTube (YouTube)** sits next to it: click **Make it available**. The installer makes sure the
 Store is on the car and then **adds RideTube to the Store's sources for you**, so it is a normal
 download under **Apps → Store** on the car. RideTube is an unofficial YouTube client for the MGU
 (GPL-3, by JustAnotherPU): it plays on the car over the car's internet, shows the picture **only
 while parked**, and drops to a sound-only podcast view while driving. It is not affiliated with
-YouTube/Google. iDrive 7.
+YouTube/Google. iDrive 7. If the Store has not started yet, the head unit is restarted once for you
+(about two minutes) and the installer waits for the Store's updater before it adds RideTube.
 
 > **First time on a car?** A Store that was installed a minute ago only starts its updater with the
 > head unit. If the installer says *the Store's updater is not running yet*, restart the head unit
@@ -185,7 +202,8 @@ python3 installer/bimmhacks_installer.py status  --key <id_rsa>
 python3 installer/bimmhacks_installer.py restore --key <id_rsa>
 
 # app store + more sources
-python3 installer/bimmhacks_installer.py store-install --key <id_rsa>
+python3 installer/bimmhacks_installer.py store-install --key <id_rsa> --restart     # --restart: restart the head unit when done
+python3 installer/bimmhacks_installer.py restart-head-unit --key <id_rsa>             # the Store only starts after a restart
 python3 installer/bimmhacks_installer.py install-idrive-apps --key <id_rsa>
 python3 installer/bimmhacks_installer.py install-car-apps --key <id_rsa>
 python3 installer/bimmhacks_installer.py install-ridetube --key <id_rsa>   # YouTube client (unofficial)
@@ -224,6 +242,10 @@ apps** again to bring them back.
 | App Store step fails to download | The **car** needs internet (USB Ethernet / LTE / tethered phone / Wi-Fi). |
 | *'cryptography' could not be installed* | Run `python -m pip install --user cryptography`, then retry. |
 | *Node.js / OpenSSH missing* | Install Node LTS from nodejs.org; Windows OpenSSH: Settings → Apps → Optional features. |
+| The Store opens on the car but asks you to restart the MGU, and cannot | A fresh Store only starts after a restart, and its own restart button needs it running. In the installer open **App Store** and click **Restart head unit** (about two minutes). Still no luck: switch the ignition off and on, or hold the volume knob for about 30 seconds until the screens restart. |
+| *An install is still running on the head unit* | The restart was refused on purpose so it cannot cut an install short. Wait a minute or two and try again. |
+| *The head unit did not answer on SSH again* | Give it a few more minutes. If it is up on the car but SSH stays closed, use **Root access → Enable (repair)** (no flashing). |
+| *Building the apps failed* with `Continue anyway? [y/N]` and `EOFError` in the log | Fixed in 1.8.2 (Windows made the build ask a question nobody could answer). Update the installer. The two `!!` lines about the renderer being older than its source are normal on a PC without Docker: the kit ships the prebuilt renderer. |
 
 ## Credits
 

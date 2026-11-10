@@ -47,7 +47,8 @@ HOST_RE = re.compile(r'^[A-Za-z0-9.:\-\[\]%]+$')
 KEY_FILES = ('id_rsa', 'id_rsa.pkcs1.pem', 'id_rsa.pkcs8.pem', 'id_rsa.ppk', 'connect.txt')
 
 ACTIONS = ('detect-vin', 'backup-coding', 'root-status', 'root-enable', 'root-flash', 'root-fix-key',
-           'root-disable', 'test', 'status', 'store-install', 'install-apps', 'restore', 'stage-store', 'add-source')
+           'root-disable', 'test', 'status', 'store-install', 'restart', 'install-apps', 'restore', 'stage-store',
+           'add-source')
 # the extra Store sources the page offers (the desktop window's App Store / More apps / Bimmhacks apps cards)
 SOURCES = [
     {'id': 'ridetube', 'label': 'RideTube · unofficial YouTube client', 'repo': bi.RIDETUBE_REPO, 'channel': 'releases',
@@ -69,7 +70,8 @@ DONE = {
     'root-disable': 'Root SSH is disabled again.',
     'test': 'Connection OK.',
     'status': 'Status read - see the activity log.',
-    'store-install': 'App Store installed. Restart the head unit to see its tile: Apps > Store.',
+    'store-install': 'App Store installed. Press "Restart head unit" so the Store can start.',
+    'restart': 'The head unit restarted.',
     'install-apps': 'Apps installed - they appear under Apps on the iDrive.',
     'restore': 'The car is back to stock.',
     'stage-store': 'Store package downloaded onto the box - the App Store now installs without internet on the box.',
@@ -361,15 +363,26 @@ class Pocket(object):
                     self.set_chip('SSH OK · ' + ip, 'good')
             return self.start(action, fn)
 
+        if action == 'restart':
+            def fn():
+                bi.do_restart_head_unit(ip, key, log=log)
+                self.set_chip('Restarted · SSH OK', 'good')
+            return self.start(action, fn)
+
         node = bi.find_node()
         if not node:
             raise Refused('The box has no Node.js (apt install nodejs).')
         if action == 'store-install':
             no_renderer, no_uplink = bool(body.get('no_renderer')), bool(body.get('no_uplink'))
+            restart = bool(body.get('restart'))
 
             def fn():
                 bi.do_store_install(node, ip, key, no_renderer=no_renderer, no_uplink=no_uplink, log=log,
-                                    from_dir=store_staged(self.store))
+                                    from_dir=store_staged(self.store), restart=restart)
+                if restart:
+                    self.set_chip('Store installed · restarted', 'good')
+                    return 'App Store installed and the head unit restarted - open Apps > Store on the car.'
+                self.set_chip('Store installed · restart the head unit', 'warn')
             return self.start(action, fn)
 
         if action == 'install-apps':
@@ -391,9 +404,11 @@ class Pocket(object):
 
             def fn():
                 r = bi.do_install_apps_source(node, ip, key, repo, label, log=log, channel=channel,
-                                              from_dir=store_staged(self.store))
+                                              from_dir=store_staged(self.store), restart_store=True)
                 if r == 'pending':
                     self.set_chip('Store installed · restart the head unit', 'warn')
+                elif r == 'slow':
+                    self.set_chip('Restarted · Store still starting', 'warn')
                 return bi.source_done_message(r, label)
             return self.start(action, fn)
         raise Refused('Unknown action: %r' % (action,))      # not reached

@@ -29,9 +29,9 @@ Needs Python 3.6+, Node.js 14+ and the OpenSSH client (built into Windows 10/11,
 Stage A (root access) also needs the `cryptography` Python package; the installer offers to add
 it. Stage C (App Store) needs internet at the car (or a prepared USB stick).
 """
-import argparse, io, json, os, queue, re, shutil, stat, subprocess, sys, tarfile, tempfile, threading
+import argparse, io, json, os, queue, re, shutil, stat, subprocess, sys, tarfile, tempfile, threading, time
 
-VERSION = '1.8.1'
+VERSION = '1.8.2'
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 ROOT = os.environ.get('BIMMHACKS_APPS_ROOT') or os.path.join(REPO, 'idrive7-apps')
@@ -112,6 +112,16 @@ def tool_env(node):
     env['MGU_NO_DOCKER'] = '1'
     env['PYTHONIOENCODING'] = 'utf-8'
     return env
+
+
+def popen_noinput(argv, **kw):
+    """Start a child that is never asked anything. Its stdin is CLOSED (an empty pipe) rather than the NUL
+    device: on Windows Python reports NUL as a terminal (os.isatty is True there), so a tool that asks
+    "continue? [y/N]" whenever stdin is a terminal asked, got end-of-input and crashed - the apps build did,
+    on a real PC. A closed pipe is not a terminal anywhere."""
+    p = subprocess.Popen(argv, stdin=subprocess.PIPE, **kw)
+    p.stdin.close()
+    return p
 
 
 def preflight(log):
@@ -321,10 +331,13 @@ def build_kit(node, apps, language, log):
     if 'doom' in apps and not os.path.isfile(os.path.join(ROOT, 'apps', 'doom', 'freedoom1.wad')):
         log('  (Doom: the free game data, 24 MB, is downloaded once - needs internet)')
     cmd = [sys.executable, os.path.join(TOOLS, 'make_kit.py'), '--language', language] + list(apps)
-    p = subprocess.Popen(cmd, cwd=ROOT, env=tool_env(node), stdin=subprocess.DEVNULL,
-                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    p = popen_noinput(cmd, cwd=ROOT, env=tool_env(node), stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     for raw in iter(p.stdout.readline, b''):
-        log('  build> ' + raw.decode('utf-8', 'replace').rstrip('\r\n'))
+        line = raw.decode('utf-8', 'replace').rstrip('\r\n')
+        log('  build> ' + line)
+        if 'which is OLDER than the source' in line:
+            log('  (expected on a PC without Docker: the kit uses the prebuilt graphics renderer that ships with the apps)')
+    p.stdout.close()
     if p.wait():
         raise InstallerError('Building the apps failed (see the log above).')
     name = 'mgu-custom-apps' + ('' if language == 'en' else '-' + language)
@@ -378,10 +391,11 @@ def ensure_cryptography(log, install=True):
         raise InstallerError("The 'cryptography' Python package is needed for root access. "
                              "Install it with:  %s -m pip install --user cryptography" % os.path.basename(sys.executable))
     log("Installing the 'cryptography' package (one-time, for root access) ...")
-    p = subprocess.Popen([sys.executable, '-m', 'pip', 'install', '--user', 'cryptography>=41.0'],
-                         stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    p = popen_noinput([sys.executable, '-m', 'pip', 'install', '--user', 'cryptography>=41.0'],
+                      stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     for raw in iter(p.stdout.readline, b''):
         log('  pip> ' + raw.decode('utf-8', 'replace').rstrip('\r\n'))
+    p.stdout.close()
     p.wait()
     if not have_cryptography():
         raise InstallerError("Could not install 'cryptography' automatically. Install it by hand:\n"
@@ -432,8 +446,7 @@ def run_ssh_root(action, log, vin=None, ip=None, gateway='auto', arch='id7', per
     env = dict(os.environ)
     env['PYTHONIOENCODING'] = 'utf-8'
     env['PYTHONUNBUFFERED'] = '1'
-    p = subprocess.Popen(argv, cwd=SSHROOT_DIR, env=env, stdin=subprocess.DEVNULL,
-                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    p = popen_noinput(argv, cwd=SSHROOT_DIR, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     for raw in iter(p.stdout.readline, b''):
         line = raw.decode('utf-8', 'replace').rstrip('\r\n')
         if 'DeprecationWarning' in line or 'utcnow()' in line:
@@ -541,8 +554,7 @@ def do_backup_coding(log, vin=None, ip=None, gateway='auto', arch='id7', out_dir
     env = dict(os.environ)
     env['PYTHONIOENCODING'] = 'utf-8'
     env['PYTHONUNBUFFERED'] = '1'
-    p = subprocess.Popen(argv, cwd=SSHROOT_DIR, env=env, stdin=subprocess.DEVNULL,
-                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    p = popen_noinput(argv, cwd=SSHROOT_DIR, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     saved = None
     for raw in iter(p.stdout.readline, b''):
         line = raw.decode('utf-8', 'replace').rstrip('\r\n')
@@ -551,6 +563,7 @@ def do_backup_coding(log, vin=None, ip=None, gateway='auto', arch='id7', out_dir
         log('  coding> ' + line)
         if line.strip().endswith('.txt'):
             saved = line.strip()
+    p.stdout.close()
     if p.wait():
         raise InstallerError('The coding snapshot could not be read. Is the ENET cable in and the car awake?')
     log('Coding snapshot saved in: ' + out_dir)
@@ -558,13 +571,101 @@ def do_backup_coding(log, vin=None, ip=None, gateway='auto', arch='id7', out_dir
     return saved or out_dir
 
 
+# -------------------------------------------------------------- restarting the head unit
+# What the Store's own "Restart head unit" does: the Node State Manager's normal restart, the request the car's
+# own restart sends (mgu-store, native/mgu-updater/README.md, "Restarting the head unit"). It is refused while a
+# Store install runs, so a restart never cuts one short. nsm_control exits 0 whether or not it took the request;
+# when it cannot, it prints why as "[Error. <why>]". The command has no quotes or backslashes: on Windows ssh
+# passes the remote command through its own quoting.
+RESTART_CMD = ('L=/var/opt/mgu-deploy/lock; if [ -e $L ]; then read P B < $L; '
+               'if [ x$B = x$(cat /proc/sys/kernel/random/boot_id) ] && kill -0 $P 2>/dev/null; '
+               'then echo INSTALL_RUNNING; exit 3; fi; fi; /usr/bin/nsm_control --requestRestart 7 --normal 2>&1')
+RESTART_BY_HAND = ('Restart it from the car instead: the Store\'s Settings > Restart head unit, or switch the '
+                   'ignition off, wait until the screens are dark, and on again - or, on most cars, hold the volume '
+                   'knob for about 30 seconds until the screens restart.')
+
+
+def restart_head_unit(car, log=print):
+    """Ask the head unit to restart, as the Store's own button does. Returns once the request is made: the
+    unit goes down a few seconds later (wait_for_restart waits for that and for it to come back)."""
+    log('Asking the head unit to restart ...')
+    code, out = car.run(RESTART_CMD, echo=False)
+    text = out.strip()
+    for line in text.splitlines():
+        if line.strip():
+            log('  car> ' + line.strip())
+    if code == 3 or 'INSTALL_RUNNING' in text:
+        raise InstallerError('An install is still running on the head unit, so it was not restarted. Wait for it '
+                             'to finish (a minute or two) and restart again.')
+    refused = re.search(r'\[Error\.\s*([^\]]*)\]', text)
+    if refused:
+        raise InstallerError('The head unit did not take the restart request (%s). %s' % (refused.group(1).strip(), RESTART_BY_HAND))
+    if code == 127 or 'nsm_control: not found' in text or 'No such file' in text:
+        raise InstallerError('This head unit has no restart command to call. ' + RESTART_BY_HAND)
+    if code not in (0, 255):          # 255: ssh was cut off as the unit went down - that is the restart working
+        raise InstallerError('The restart request failed (exit %d): %s' % (code, text[-200:]))
+    log('Restart requested.')
+
+
+def head_unit_answers(car):
+    code, out = car.run('echo HU_UP', echo=False)
+    return code == 0 and 'HU_UP' in out
+
+
+def wait_for_restart(car, log=print, poll_s=5.0, down_s=180.0, up_s=420.0, sleep=time.sleep, clock=time.monotonic):
+    """After restart_head_unit: wait for the unit to go down, then for it to answer on SSH again. A unit that
+    never goes down, or never comes back, is an error that says what to try."""
+    log('Waiting for the head unit to restart: it goes dark, then comes back (usually one to two minutes) ...')
+    t0 = clock()
+    went_down = False
+    while clock() - t0 < down_s:
+        if not head_unit_answers(car):
+            went_down = True
+            break
+        sleep(poll_s)
+    if not went_down:
+        raise InstallerError('The head unit is still answering %d seconds after the restart request, so it did not '
+                             'restart. %s' % (down_s, RESTART_BY_HAND))
+    log('  the head unit is down ...')
+    t1 = clock()
+    last_note = t1
+    while clock() - t1 < up_s:
+        if head_unit_answers(car):
+            log('  the head unit is back (%d s).' % (clock() - t0))
+            return
+        sleep(poll_s)
+        if clock() - last_note >= 30:
+            last_note = clock()
+            log('  still starting ... %d s' % (clock() - t0))
+    raise InstallerError('The head unit did not answer on SSH again within %d minutes. Give it a few more minutes; if '
+                         'it is up on the car but SSH stays closed, use Root access > "Enable (repair)".' % (up_s // 60))
+
+
+def do_restart_head_unit(ip, key, log=print, wait=True, **timing):
+    """Restart the head unit at ip (root key) and, with wait, until it answers on SSH again."""
+    if not key or not os.path.isfile(key):
+        raise InstallerError('The car SSH key is needed. Do the root-access step first, or pick the key.')
+    ssh = find_ssh()
+    if not ssh:
+        raise InstallerError('The OpenSSH client is missing. Windows: Settings > Apps > Optional features > '
+                             'add "OpenSSH Client"')
+    car = Car(ssh, ip or DEFAULT_IP, key, log=log)
+    try:
+        restart_head_unit(car, log)
+        if wait:
+            wait_for_restart(car, log, **timing)
+    finally:
+        car.close()
+
+
 # -------------------------------------------------------------- stage C: the App Store (mgu-store)
 
-def do_store_install(node, ip, key, no_renderer=False, no_uplink=False, log=print, from_dir=None):
+def do_store_install(node, ip, key, no_renderer=False, no_uplink=False, log=print, from_dir=None, restart=False):
     """Install the on-car MGU App Store with the bundled mgu-install.js.
 
     from_dir: a folder `usb-repo` staged earlier (it holds mgu-repo/mgu-store): the Store package is
-    taken from there instead of GitHub, so this machine needs no internet (the Pocket box)."""
+    taken from there instead of GitHub, so this machine needs no internet (the Pocket box).
+    restart: then restart the head unit and wait for it - the Store only starts after a restart."""
     if not os.path.isfile(STORE_JS):
         raise InstallerError('The App Store installer is missing (expected it in %s).' % STORE_DIR)
     if not key or not os.path.isfile(key):
@@ -582,17 +683,23 @@ def do_store_install(node, ip, key, no_renderer=False, no_uplink=False, log=prin
         argv.append('--no-renderer')
     if no_uplink:
         argv.append('--no-uplink')
-    p = subprocess.Popen(argv, cwd=STORE_DIR, stdin=subprocess.DEVNULL,
-                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    p = popen_noinput(argv, cwd=STORE_DIR, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     for raw in iter(p.stdout.readline, b''):
         line = raw.decode('utf-8', 'replace').rstrip('\r\n')
         log('  store> ' + line)
+    p.stdout.close()
     code = p.wait()
     if code == 2:
         raise InstallerError('The App Store installer refused the request or the usage was wrong (see above).')
     if code:
         raise InstallerError('The App Store install failed (exit %d; see above).' % code)
-    log('App Store installed. Restart the head unit (Settings on the car, or power-cycle) to see its tile.')
+    if restart:
+        log('App Store installed. Restarting the head unit so the Store can start ...')
+        do_restart_head_unit(ip, key, log=log)
+        log('The head unit is back. The Store\'s tile is under Apps; give it a minute to finish starting.')
+    else:
+        log('App Store installed. It starts after the head unit restarts: press "Restart head unit" here, or '
+            'restart it from the car (Settings, or ignition off and on).')
     log('Afterwards the client installs and updates apps from the car screen - Apps > Store.')
 
 
@@ -618,10 +725,10 @@ def do_usb_repo(node, dest, inputs, log=print):
     log('Staging %s onto %s (downloads the apps once; needs internet on this PC) ...'
         % (', '.join(inputs) if inputs else 'the default repository', dest))
     argv = [node, STORE_JS, 'usb-repo', dest] + list(inputs)
-    p = subprocess.Popen(argv, cwd=STORE_DIR, stdin=subprocess.DEVNULL,
-                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    p = popen_noinput(argv, cwd=STORE_DIR, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     for raw in iter(p.stdout.readline, b''):
         log('  store> ' + raw.decode('utf-8', 'replace').rstrip('\r\n'))
+    p.stdout.close()
     code = p.wait()
     if code == 2:
         raise InstallerError('Staging was refused or the usage was wrong (see above).')
@@ -654,9 +761,11 @@ def store_present(car):
     return 'STORE_PRESENT' in out
 
 
-def add_store_source(car, repo, channel='releases', log=print):
+def add_store_source(car, repo, channel='releases', log=print, wait_s=None):
     """Add a GitHub repo as a source of the car's Store. -> 'added' or 'already'; raises with the
-    updater's reason otherwise. Read-only for the car apart from the Store's own sources.json."""
+    updater's reason otherwise. Read-only for the car apart from the Store's own sources.json.
+    wait_s: how long to keep trying for the updater to be up (default about 24 s; after a head-unit
+    restart it needs longer)."""
     if not SOURCE_RE.match(repo or ''):
         raise InstallerError('The source must be a GitHub owner/repo, e.g. JustAnotherPU/ridetube.')
     if not CHANNEL_RE.match(channel or ''):
@@ -667,7 +776,8 @@ def add_store_source(car, repo, channel='releases', log=print):
         script = f.read()
     log('Adding %s (%s) as a source of the car\'s Store ...' % (repo, channel))
     import shlex
-    code, out = car.run('/usr/bin/node - %s %s' % (shlex.quote(repo), shlex.quote(channel)),
+    wait_arg = ' --wait=%d' % int(wait_s) if wait_s else ''
+    code, out = car.run('/usr/bin/node - %s %s%s' % (shlex.quote(repo), shlex.quote(channel), wait_arg),
                         stdin_data=script, echo=False)
     verdict = ''
     for line in out.splitlines():
@@ -685,7 +795,8 @@ def add_store_source(car, repo, channel='releases', log=print):
     raise InstallerError('Could not add %s to the car\'s Store: %s' % (repo, why))
 
 
-def do_install_apps_source(node, ip, key, repo, label, stage_dir=None, log=print, channel='releases', from_dir=None):
+def do_install_apps_source(node, ip, key, repo, label, stage_dir=None, log=print, channel='releases', from_dir=None,
+                           restart_store=False):
     """Make an extra app source available on the car. These apps install through the on-car Store:
 
       - stage_dir given  -> write the repo to a USB folder (works offline); the car installs it
@@ -694,7 +805,11 @@ def do_install_apps_source(node, ip, key, repo, label, stage_dir=None, log=print
                             package staged on this machine), then ADD the repo to the Store's sources
                             over ssh - the Store shows its apps once it has read them (car internet).
                             A built-in source (idrive-apps, car-apps, idrive7-apps) is already there.
+      - restart_store    -> a Store installed here, or one whose updater is not running yet, needs the head
+                            unit restarted to start: do that (and wait for it) instead of asking the user to.
     -> 'staged' | 'builtin' | 'added' | 'already'
+       | 'pending' (the Store's updater is not up and the unit was not restarted: restart it, then retry)
+       | 'slow'    (restarted, but the updater is still not up: give it a few minutes, then retry)
     """
     if not SOURCE_RE.match(repo or ''):
         raise InstallerError('The source must be a GitHub owner/repo, e.g. robertnisipeanu/idrive-apps.')
@@ -710,21 +825,37 @@ def do_install_apps_source(node, ip, key, repo, label, stage_dir=None, log=print
         raise InstallerError('The OpenSSH client is missing. Windows: Settings > Apps > Optional features > '
                              'add "OpenSSH Client"')
     car = Car(ssh, ip, key, log=log)
+    restarted = False
     try:
         if not store_present(car):
             log('The on-car Store is not installed yet - installing it first ...')
-            do_store_install(node, ip, key, log=log, from_dir=from_dir)
+            do_store_install(node, ip, key, log=log, from_dir=from_dir, restart=restart_store)
+            restarted = restart_store
         if repo.lower() in BUILTIN_SOURCES:
             log('%s is a built-in Store source (%s): it is already in the car\'s Store. On the car open '
                 'Apps > Store, find the apps and Install.' % (label, BUILTIN_SOURCES[repo.lower()]))
             return 'builtin'
-        try:
-            result = add_store_source(car, repo, channel, log=log)
-        except StoreNotReady as e:
-            log('The Store\'s updater is not running yet (%s).' % e)
-            log('It starts with the head unit: restart the head unit (car Settings, or power-cycle), wait a '
-                'minute, then add %s again.' % label)
-            return 'pending'
+        result = None
+        for attempt in (1, 2):
+            try:
+                # after a restart the updater takes a while to come up: keep trying longer
+                result = add_store_source(car, repo, channel, log=log, wait_s=150 if restarted else None)
+                break
+            except StoreNotReady as e:
+                if restart_store and not restarted and attempt == 1:
+                    log('The Store\'s updater is not running (%s): restarting the head unit so it starts ...' % e)
+                    restart_head_unit(car, log)
+                    wait_for_restart(car, log)
+                    restarted = True
+                    continue
+                if restarted:
+                    log('The head unit restarted, but the Store\'s updater is still not up (%s).' % e)
+                    log('Give it a few more minutes, then add %s again.' % label)
+                    return 'slow'
+                log('The Store\'s updater is not running yet (%s).' % e)
+                log('It starts with the head unit: restart the head unit (the "Restart head unit" button, or the '
+                    'car\'s Settings), wait a minute, then add %s again.' % label)
+                return 'pending'
         if result == 'already':
             log('%s was already a source of the car\'s Store.' % label)
         else:
@@ -746,6 +877,8 @@ def source_done_message(result, label):
         'already': '%s was already in the car\'s Store: open Apps > Store on the car.' % label,
         'pending': 'The Store is installed, but its updater only starts with the head unit. Restart the head unit, '
                    'wait a minute, then add %s again.' % label,
+        'slow': 'The head unit restarted, but the Store has not finished starting. Give it a few more minutes, '
+                'then add %s again.' % label,
     }.get(result, 'Done.')
 
 
@@ -876,6 +1009,10 @@ CREDITS = [
 ]
 
 
+RESTART_NOTE = ('\n\nIf the Store is not on the car yet, or has not started, the head unit restarts once '
+                '(about two minutes, the screens go dark) so it can. Park the car and keep the ignition on.')
+
+
 def run_gui():
     import tkinter as tk
     from tkinter import ttk, filedialog, messagebox
@@ -950,15 +1087,16 @@ def run_gui():
         c.pack(fill=fill, expand=expand, padx=padx, pady=pady)
         return c
 
-    def two_up(page):
-        """Two equal columns of cards side by side (the pages that would otherwise be twice as tall)."""
+    def two_up(page, weights=(1, 1)):
+        """Two columns of cards side by side (the pages that would otherwise be twice as tall); equal unless
+        weights says otherwise."""
         cols = tk.Frame(page, bg=BG)
         cols.pack(fill='x', pady=(10, 0))
         left, right = tk.Frame(cols, bg=BG), tk.Frame(cols, bg=BG)
         left.grid(row=0, column=0, sticky='nsew')
         right.grid(row=0, column=1, sticky='nsew')
-        cols.columnconfigure(0, weight=1, uniform='two')
-        cols.columnconfigure(1, weight=1, uniform='two')
+        cols.columnconfigure(0, weight=weights[0], uniform='two')
+        cols.columnconfigure(1, weight=weights[1], uniform='two')
         return left, right
 
     def kicker(parent, text):
@@ -1267,29 +1405,53 @@ def run_gui():
 
     # ======================================================= 3. App Store (+ RideTube)
     p3 = section('App Store')
-    l3, r3 = two_up(p3)
+    l3, r3 = two_up(p3, (3, 2))
     c3 = card(l3, pady=(0, 10), padx=(22, 6))
     kicker(c3, 'Step 3  ·  on-car store')
     title(c3, 'Install the MGU App Store')
-    para(c3, 'The client browses, installs and updates apps from the car screen (Apps > Store). The car '
-             'needs internet for this: USB Ethernet, an LTE stick, a tethered phone or Wi-Fi. Restart the '
-             'head unit once when it finishes.', wrap=400)
-    no_renderer_var = tk.BooleanVar(value=cfg.get('no_renderer', False))
-    no_uplink_var = tk.BooleanVar(value=cfg.get('no_uplink', False))
-    ttk.Checkbutton(c3, text='Leave out the renderer (the Store draws in software)', variable=no_renderer_var).pack(anchor='w', padx=20, pady=(6, 0))
-    ttk.Checkbutton(c3, text='Leave out the internet uplink component', variable=no_uplink_var).pack(anchor='w', padx=20)
+    para(c3, 'The car then browses, installs and updates apps from its own screen (Apps > Store). It needs '
+             'internet for that, and the Store only starts after the head unit has restarted.', wrap=470)
+
+    def option(parent, var, text, explain):
+        ttk.Checkbutton(parent, text=text, variable=var).pack(anchor='w', padx=20, pady=(8, 0))
+        ttk.Label(parent, text=explain, style='Small.TLabel', justify='left', wraplength=440).pack(anchor='w', padx=42)
+    renderer_var = tk.BooleanVar(value=not cfg.get('no_renderer', False))
+    uplink_var = tk.BooleanVar(value=not cfg.get('no_uplink', False))
+    restart_var = tk.BooleanVar(value=cfg.get('store_restart', True))
+    option(c3, renderer_var, 'Renderer',
+           'Draws the Store and other apps with the head unit\'s graphics chip: smooth, with the on-screen '
+           'keyboard. Without it the Store falls back to simpler screens.')
+    option(c3, uplink_var, 'Internet uplink',
+           'Gives the car internet through a USB Ethernet adapter, an LTE stick, phone tethering or Wi-Fi, so '
+           'the Store can download apps. Untick only if you will install from a USB stick.')
+    option(c3, restart_var, 'Restart the head unit when done',
+           'About two minutes; the installer waits until the car is back.')
 
     def on_store():
         _, key, ip, _ = conn_values()
-        save_config(dict(load_config(), no_renderer=no_renderer_var.get(), no_uplink=no_uplink_var.get()))
-        if not messagebox.askokcancel('Install App Store', 'Install the MGU App Store on the car at '
-                                      '%s?\n\nThe car needs internet for this.' % ip):
+        no_r, no_u, rs = not renderer_var.get(), not uplink_var.get(), restart_var.get()
+        save_config(dict(load_config(), no_renderer=no_r, no_uplink=no_u, store_restart=rs))
+        note = ('\n\nWhen it is done the head unit restarts (about two minutes, the screens go dark). Park the car '
+                'and keep the ignition on.' if rs else '\n\nThe Store starts after the head unit restarts: use '
+                '"Restart head unit" afterwards.')
+        if not messagebox.askokcancel('Install App Store', 'Install the MGU App Store on the car at %s?\n\n'
+                                      'The car needs internet for this.%s' % (ip, note)):
             return
         def w():
-            do_store_install(need_node(), ip, key, no_renderer=no_renderer_var.get(), no_uplink=no_uplink_var.get(), log=log)
-        start(w, 'App Store installed. Restart the head unit to see its tile.')
-    sr = row(c3)
+            do_store_install(need_node(), ip, key, no_renderer=no_r, no_uplink=no_u, log=log, restart=rs)
+        start(w, 'App Store installed and the head unit restarted - open Apps > Store on the car.' if rs else
+              'App Store installed. Press "Restart head unit" (or restart the car) so the Store can start.')
+
+    def on_restart():
+        _, key, ip, _ = conn_values()
+        if not messagebox.askokcancel('Restart head unit', 'Restart the head unit at %s now?\n\nThe screens go dark '
+                                      'for about two minutes. Do not do this while an install is running, or while '
+                                      'driving.' % ip):
+            return
+        start(lambda: do_restart_head_unit(ip, key, log=log), 'The head unit restarted.')
+    sr = row(c3, pady=(10, 12))
     button(sr, 'Install the App Store', on_store, style='Accent.TButton')
+    button(sr, 'Restart head unit', on_restart)
 
     def pick_stage(var):
         d = filedialog.askdirectory(title='Folder or USB stick to stage the apps onto')
@@ -1306,17 +1468,19 @@ def run_gui():
             para(c, licence, wrap=wrap)
         stage = tk.StringVar(value=cfg.get(cfg_key, ''))
         f = row(c, pady=(6, 2))
-        ttk.Label(f, text='Stage to (USB / folder)', style='Muted.TLabel').pack(side='left', padx=(4, 8))
+        ttk.Label(f, text='Stage to USB', style='Muted.TLabel').pack(side='left', padx=(4, 8))
         button(f, 'Choose', lambda: pick_stage(stage), side='right')
-        ttk.Entry(f, textvariable=stage, width=12).pack(side='left', fill='x', expand=True, padx=(0, 6))
+        ttk.Entry(f, textvariable=stage, width=6).pack(side='left', fill='x', expand=True, padx=(0, 6))
 
         def go():
             _, key, ip, _ = conn_values()
             save_config(dict(load_config(), **{cfg_key: stage.get().strip()}))
-            if not messagebox.askokcancel(head, confirm % ip):
+            staged = stage.get().strip()
+            if not messagebox.askokcancel(head, confirm % ip + ('' if staged else RESTART_NOTE)):
                 return
             def w():
-                r = do_install_apps_source(need_node(), ip, key, repo, label, stage_dir=stage.get().strip() or None, log=log)
+                r = do_install_apps_source(need_node(), ip, key, repo, label, stage_dir=staged or None, log=log,
+                                           restart_store=True)
                 return Done(source_done_message(r, label))
             start(w, done_msg)
         r = row(c)
@@ -1324,15 +1488,15 @@ def run_gui():
         button(r, 'Open repository', lambda: _open_url(url))
         return c
 
-    source_card(r3, 'Popular community source', 'RideTube  ·  unofficial YouTube client',
+    source_card(r3, 'Community source  ·  unofficial', 'RideTube  ·  YouTube client',
                 'Plays on the car over the car\'s internet; the picture shows only while parked and drops to a '
                 'podcast view (sound only) while driving. GPL-3, by JustAnotherPU; not affiliated with YouTube '
-                'or Google. iDrive 7. Installs the Store first if it is missing.',
+                'or Google. iDrive 7. Installs the Store first if it is missing (the head unit then restarts once).',
                 RIDETUBE_REPO, 'RideTube (YouTube, unofficial)', 'stage_rt',
                 'RideTube is a source of the car\'s Store now - on the car open Apps > Store to install it.',
                 'Make the RideTube YouTube client available on the car at %s?\n\nUnofficial. Video is parked-only. '
                 'Installs the Store if needed, then adds JustAnotherPU/ridetube to its sources.',
-                'https://github.com/JustAnotherPU/ridetube', padx=(6, 22), wrap=400)
+                'https://github.com/JustAnotherPU/ridetube', padx=(6, 22), wrap=330)
 
     # ======================================================= 4. More apps (idrive-apps, car-apps)
     p4 = section('More apps')
@@ -1387,10 +1551,12 @@ def run_gui():
         if not re.match(r'^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$', repo):
             messagebox.showwarning('Bimmhacks apps', 'Enter the source as owner/repo, e.g. bimmhacks/apps.')
             return
-        if not messagebox.askokcancel('Bimmhacks apps', 'Make %s available on the car at %s?' % (repo, ip)):
+        staged = stage_our.get().strip()
+        if not messagebox.askokcancel('Bimmhacks apps', 'Make %s available on the car at %s?%s' % (repo, ip, '' if staged else RESTART_NOTE)):
             return
         def w():
-            r = do_install_apps_source(need_node(), ip, key, repo, 'Bimmhacks Apps', stage_dir=stage_our.get().strip() or None, log=log)
+            r = do_install_apps_source(need_node(), ip, key, repo, 'Bimmhacks Apps', stage_dir=staged or None, log=log,
+                                       restart_store=True)
             return Done(source_done_message(r, 'Bimmhacks Apps'))
         start(w, 'Bimmhacks apps are a source of the car\'s Store now - install them from Apps > Store on the car.')
     ob = row(c5, pady=(8, 2))
@@ -1526,7 +1692,7 @@ def main(argv=None):
     ap.add_argument('action', nargs='?', default='gui',
                     choices=['gui', 'install', 'test', 'status', 'restore', 'apps',
                              'root-status', 'root-flash', 'root-enable', 'root-fix-key', 'root-disable',
-                             'detect-vin', 'backup-coding', 'store-install',
+                             'detect-vin', 'backup-coding', 'store-install', 'restart-head-unit',
                              'install-idrive-apps', 'install-car-apps', 'install-ridetube',
                              'install-our-apps', 'usb-repo'])
     ap.add_argument('apps', nargs='*', help='app ids for install (default: all non-experimental apps)')
@@ -1545,6 +1711,10 @@ def main(argv=None):
     ap.add_argument('--no-controller-gate', action='store_true', help='do not install the controller gate (Doom)')
     ap.add_argument('--no-renderer', action='store_true', help='store-install: leave out the renderer')
     ap.add_argument('--no-uplink', action='store_true', help='store-install: leave out the internet uplink')
+    ap.add_argument('--restart', action='store_true',
+                    help='store-install / install-ridetube / install-our-apps ...: restart the head unit when the '
+                         'Store needs it (and wait for it to come back)')
+    ap.add_argument('--no-wait', action='store_true', help='restart-head-unit: do not wait for the unit to come back')
     ap.add_argument('--keep-build', action='store_true', help="keep oap-sdk/ and dist/ after installing (contain BMW's SDK)")
     a = ap.parse_args(argv)
 
@@ -1592,7 +1762,13 @@ def main(argv=None):
             if not a.key:
                 ap.error('--key is needed')
             do_store_install(node, a.ip or ip_from_key(a.key) or DEFAULT_IP, a.key,
-                             no_renderer=a.no_renderer, no_uplink=a.no_uplink, log=log)
+                             no_renderer=a.no_renderer, no_uplink=a.no_uplink, log=log, restart=a.restart)
+            return
+        if a.action == 'restart-head-unit':
+            if not a.key:
+                ap.error('--key is needed')
+            do_restart_head_unit(a.ip or ip_from_key(a.key) or DEFAULT_IP, a.key, log=log, wait=not a.no_wait)
+            log('The head unit restarted.' if not a.no_wait else 'Restart requested.')
             return
         if a.action in ('install-idrive-apps', 'install-car-apps', 'install-ridetube', 'install-our-apps'):
             if not a.key and not a.stage:
@@ -1609,9 +1785,10 @@ def main(argv=None):
                 if not repo:
                     raise InstallerError('No "our apps" repository set. Pass --repo owner/repo, or set '
                                          'BIMMHACKS_APPS_REPO.')
-            result = do_install_apps_source(node, ip2, a.key, repo, label, stage_dir=a.stage, log=log)
+            result = do_install_apps_source(node, ip2, a.key, repo, label, stage_dir=a.stage, log=log,
+                                            restart_store=a.restart)
             log(source_done_message(result, label))
-            if result == 'pending':
+            if result in ('pending', 'slow'):
                 sys.exit(3)         # not a failure, not done: the Store's updater starts with the head unit
             return
 

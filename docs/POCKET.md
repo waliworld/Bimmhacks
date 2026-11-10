@@ -58,9 +58,13 @@ installer, the same safety gates — and the phone is only the screen.
    The unit reboots; a few minutes. Keep the phone awake or come back: the box keeps working and the
    page catches up with the log. When it finishes the key is saved on the box — **Download key
    bundle** keeps a copy on the phone.
-5. **Step 2 · App Store**: **Install the App Store**. The box installs it from the package it staged;
-   afterwards the **car** needs internet (USB Ethernet, LTE stick, tethered phone or Wi-Fi) to browse
-   the Store: *Apps → Store* on the iDrive, after a head-unit restart.
+5. **Step 2 · App Store**: tick what you want and press **Install the App Store**. *Renderer* (smooth
+   graphics and the on-screen keyboard) and *Internet uplink* (gives the car internet through USB
+   Ethernet, an LTE stick, phone tethering or Wi-Fi so the Store can download) should stay ticked.
+   *Restart the head unit when done* (ticked) restarts the car's head unit once the Store is on — the
+   screens go dark for about two minutes and the box waits for the car to come back. The Store only
+   starts after that restart. Unticked it? Press **Restart head unit** later. The box installs the Store
+   from the package it staged; afterwards the **car** needs internet to browse it: *Apps → Store*.
 6. **More sources for the Store**: the Store already lists **idrive7-apps**, **idrive-apps** (cluster /
    HUD maps) and **car-apps** (iDrive 8) once it is installed. **Add RideTube** (the unofficial YouTube
    client) and **Add your repo** put further GitHub sources into the Store for you — the box asks the

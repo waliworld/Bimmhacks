@@ -150,9 +150,10 @@ class ScriptAgainstFakeUpdater(unittest.TestCase):
         self.assertEqual(self.up.sources, [])
 
     def test_updater_not_running_retries_then_reports_waiting(self):
-        rc, out = run_script(self.up, 'o/r', 'releases', sock=os.path.join(self.up.dir, 'nothing.sock'), retries='3')
+        rc, out = run_script(self.up, 'o/r', 'releases', sock=os.path.join(self.up.dir, 'nothing.sock'), retries='12')
         self.assertEqual(rc, 3, 'waiting is its own status: the Store is there, its updater starts with the head unit')
-        self.assertEqual(sum(1 for l in out if l.startswith('waiting for the updater')), 2)
+        # twelve tries, a line on the first and every fifth: a long wait is not a wall of identical lines
+        self.assertEqual(sum(1 for l in out if l.startswith('waiting for the updater')), 3)
         self.assertTrue(out[-1].startswith('WAITING: the updater is not running'), out)
         self.assertEqual(self.up.requests, [])
 

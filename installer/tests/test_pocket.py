@@ -209,6 +209,11 @@ class Guards(unittest.TestCase):
     @unittest.skipIf(os.name == 'nt', 'the fake ssh is a shell script')
     def test_add_source_runs_the_installer_path(self):
         import shutil as _sh
+        real_wait = bi.wait_for_restart
+        bi.wait_for_restart = lambda car, log=print, **k: real_wait(car, log, **dict(k, poll_s=0.01))
+
+        def real_wait_for_restart_restore():
+            bi.wait_for_restart = real_wait
         log_file = None
         with Box() as box, FakeSsh():
             key = os.path.join(box.dir, 'id_rsa')
@@ -232,21 +237,69 @@ class Guards(unittest.TestCase):
                 st, r = box.run('add-source', repo=bi.CARAPPS_REPO, label='car-apps')
                 s = box.wait()
                 self.assertIn('built-in', s['last']['message'])
-                # a Store whose updater is not up yet (just installed): told to restart, not an error
-                os.environ['FAKE_SSH_SOURCE'] = 'waiting'
+                # a Store whose updater is not up yet: the box restarts the head unit once and waits for it, and
+                # when the updater is still not up it says so (not an error, and not "restart it" again)
+                os.environ.update(FAKE_SSH_SOURCE='waiting', FAKE_SSH_STATE=os.path.join(box.dir, 'state'), FAKE_SSH_DOWN_PROBES='1')
                 st, r = box.run('add-source', repo='someone/else', label='Someone')
                 s = box.wait()
                 self.assertTrue(s['last']['ok'], s['last'])
-                self.assertIn('Restart the head unit', s['last']['message'])
-                self.assertEqual(s['chip'], ['Store installed · restart the head unit', 'warn'])
+                self.assertIn('few more minutes', s['last']['message'])
+                self.assertEqual(s['chip'], ['Restarted · Store still starting', 'warn'])
             finally:
-                os.environ.pop('FAKE_SSH_LOG', None)
-                os.environ.pop('FAKE_SSH_SOURCE', None)
+                real_wait_for_restart_restore()
+                for k in ('FAKE_SSH_LOG', 'FAKE_SSH_SOURCE', 'FAKE_SSH_STATE', 'FAKE_SSH_DOWN_PROBES'):
+                    os.environ.pop(k, None)
             with open(log_file) as f:
                 sent = [l for l in f.read().splitlines() if l.startswith('add-source ')]
-        self.assertEqual(len(sent), 2, sent)          # RideTube, then the one that waited; car-apps is built in
+        self.assertEqual(len(sent), 3, sent)          # RideTube; then the one that waited, again after the restart; car-apps is built in
         self.assertTrue(sent[0].startswith('add-source JustAnotherPU/ridetube releases'), sent)
-        self.assertTrue(sent[1].startswith('add-source someone/else releases'), sent)
+        self.assertTrue(all(l.startswith('add-source someone/else releases') for l in sent[1:]), sent)
+
+    @unittest.skipIf(os.name == 'nt', 'the fake ssh is a shell script')
+    @unittest.skipUnless(__import__('shutil').which('node'), 'needs node')
+    def test_restart_and_the_store_options(self):
+        saved = {k: os.environ.get(k) for k in ('FAKE_SSH_LOG', 'FAKE_SSH_STATE', 'FAKE_SSH_DOWN_PROBES')}
+        real_store, real_wait = bi.do_store_install, bi.wait_for_restart
+        calls = []
+        bi.do_store_install = lambda node, ip, key, **k: calls.append({x: k[x] for x in ('no_renderer', 'no_uplink', 'restart')})
+        bi.wait_for_restart = lambda car, log=print, **k: real_wait(car, log, **dict(k, poll_s=0.01))
+        try:
+            with Box() as box, FakeSsh():
+                st, r = box.run('restart')
+                self.assertEqual(st, 400, 'no key yet')
+                self.assertIn('SSH key', r['error'])
+                key = os.path.join(box.dir, 'id_rsa')
+                with open(key, 'w') as f:
+                    f.write('fake key\n')
+                box.call('/api/car', {'key': key, 'ip': '127.0.0.1'})
+                log_file = os.path.join(box.dir, 'ssh.log')
+                os.environ.update(FAKE_SSH_LOG=log_file, FAKE_SSH_STATE=os.path.join(box.dir, 'state'), FAKE_SSH_DOWN_PROBES='1')
+                st, r = box.run('restart')
+                self.assertEqual(st, 202, r)
+                s = box.wait()
+                self.assertTrue(s['last']['ok'], '\n'.join(box.log()[-8:]))
+                self.assertEqual(s['last']['message'], 'The head unit restarted.')
+                with open(log_file) as f:
+                    self.assertEqual(len([l for l in f.read().splitlines() if l.startswith('L=/var/opt/mgu-deploy/lock;')]), 1)
+                # the page's three options -> the install call: ticked boxes are "include", the server's flags are "leave out"
+                st, r = box.run('store-install', no_renderer=True, no_uplink=False, restart=True)
+                self.assertEqual(st, 202, r)
+                s = box.wait()
+                self.assertIn('restarted', s['last']['message'])
+                self.assertEqual(s['chip'], ['Store installed · restarted', 'good'])
+                st, r = box.run('store-install')
+                s = box.wait()
+                self.assertIn('Restart head unit', s['last']['message'])
+                self.assertEqual(s['chip'][1], 'warn')
+        finally:
+            bi.do_store_install, bi.wait_for_restart = real_store, real_wait
+            for k, v in saved.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+        self.assertEqual(calls, [{'no_renderer': True, 'no_uplink': False, 'restart': True},
+                                 {'no_renderer': False, 'no_uplink': False, 'restart': False}])
 
     def test_store_package_staged_on_the_box_is_used_offline(self):
         with Box() as box:
@@ -264,6 +317,7 @@ class Guards(unittest.TestCase):
 
             class FakeProc(object):
                 stdout = BytesIO(b'')
+                stdin = BytesIO()
 
                 @staticmethod
                 def wait():

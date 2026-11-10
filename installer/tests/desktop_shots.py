@@ -10,7 +10,7 @@ mgu-store for the real Store updater (MGU_STORE_SRC, see installer/tests/test_st
 Everything the window talks to is a stand-in from the test suite: the fake ENET car (fake_enet.py, found by
 the window's own UDP broadcast discovery), a fake `ssh`, the Store's REAL updater (updater_harness.js) and a
 synthetic capture. The dialogs are Tk's own, so they look plainer than the native ones Windows shows; the
-text is the same. Writes installer/screenshots/NN-name.png (14 steps), 00-overview.png and refreshes
+text is the same. Writes installer/screenshots/NN-name.png (17 steps), 00-overview.png and refreshes
 installer/screenshot.png (the README's picture). Environment: OUT (folder), DEMO_DIR (default
 <tmp>/bimmhacks: it shows in the key field and the log; created and removed by the script).
 """
@@ -57,6 +57,17 @@ cmd=${cmd#export LC_ALL=C; }
 case "$cmd" in
     "echo CONNECTED"*) printf 'CONNECTED\\n0\\nMGU_OAP_OK\\n' ;;
     "test -f /var/opt/mgu-deploy/mgu-deploy.sh"*) echo STORE_PRESENT ;;
+    "L=/var/opt/mgu-deploy/lock;"*) echo down:2 > "$HU_STATE" ;;
+    "echo HU_UP")
+        if [ -f "$HU_STATE" ]; then
+            n=$(cat "$HU_STATE"); n=${n#down:}
+            if [ "$n" -gt 0 ]; then
+                echo "down:$((n - 1))" > "$HU_STATE"
+                echo "ssh: connect to host 169.254.36.47 port 22: Connection refused" >&2; exit 255
+            fi
+            rm -f "$HU_STATE"
+        fi
+        echo HU_UP ;;
     "/usr/bin/node - "*) eval "node ${cmd#/usr/bin/node}" ;;
     *) : ;;
 esac
@@ -64,6 +75,9 @@ exit 0
 ''')
 os.chmod(stub, 0o755)
 os.environ['PATH'] = stub_dir + os.pathsep + os.environ['PATH']
+os.environ['HU_STATE'] = os.path.join(demo, 'hu-state')
+_wait = bi.wait_for_restart
+bi.wait_for_restart = lambda car, log=print, **k: _wait(car, log, **dict(k, poll_s=0.4))   # the demo car is quick about it
 
 up = RealUpdater()
 os.environ.update(MGU_UPDATER_SOCKET=up.sock, MGU_OAP_ROOT=up.oap, MGU_ADD_SOURCE_RETRIES='2', MGU_ADD_SOURCE_WAIT_MS='150')
@@ -179,12 +193,25 @@ def mainloop(root, *a):
             # ---- 8. App Store + RideTube
             go_tab(2); root.update()
             shot('08-app-store')
+            # the Store install's own confirmation (cancelled: a screenshot run never installs a Store)
+            real_dialogs_on()
+            dialog('08b-store-install-confirm', 'cancel')
+            button('Install the App Store').invoke()
+            real_dialogs_off()
             real_dialogs_on()
             dialog('09-ridetube-confirm', 'ok')
             button('Make it available').invoke()
             real_dialogs_off()
             wait_idle()
             shot('10-ridetube-added')
+
+            # restart the head unit: the confirmation, then the fake car goes dark and comes back
+            real_dialogs_on()
+            dialog('10b-restart-confirm', 'ok')
+            button('Restart head unit').invoke()
+            real_dialogs_off()
+            wait_idle()
+            shot('10c-head-unit-restarted')
 
             # ---- 11. More apps
             go_tab(3); root.update()

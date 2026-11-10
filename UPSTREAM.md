@@ -9,7 +9,11 @@ This project bundles three upstream repositories, each copied unchanged except w
 - **Licence:** MIT (`idrive7-apps/LICENSE`); Doom app GPL-2.0 (`idrive7-apps/apps/doom/LICENSE`,
   source in `idrive7-apps/third_party/doomgeneric`); fonts SIL OFL 1.1.
 - **Change:** `kit/tools/make_kit.py` honours `MGU_NO_DOCKER=1` (set by the installer) to skip the
-  Docker build of the GPU renderer and ship the committed prebuilt one.
+  Docker build of the GPU renderer and ship the committed prebuilt one, and under it never asks
+  "Continue anyway? [y/N]" (`ask()`; upstream's own `prebuilt/SOURCE_SHA256` is older than its source,
+  so the question comes up for everyone without Docker). Without that, a Windows PC died with an
+  `EOFError` there: it passes the NUL device off as a terminal, so `isatty()` said "ask" and nobody
+  could answer. The installer also starts such tools with a closed pipe for stdin instead of NUL.
 
 ## 2. `tools/idrive7-8-ssh-root/` — root access over ENET
 
@@ -96,7 +100,7 @@ This project bundles three upstream repositories, each copied unchanged except w
 git clone --depth 1 https://github.com/cauliflowermossgrape/idrive7-apps /tmp/apps
 rm -rf idrive7-apps && mkdir idrive7-apps
 (cd /tmp/apps && tar cf - --exclude=./.git .) | tar xf - -C idrive7-apps
-# re-apply the MGU_NO_DOCKER line in idrive7-apps/kit/tools/make_kit.py (pick_renderer)
+# re-apply the MGU_NO_DOCKER lines in idrive7-apps/kit/tools/make_kit.py (pick_renderer, and ask(): no prompt under it)
 
 # root tool
 git clone --depth 1 https://github.com/cauliflowermossgrape/idrive7-8-ssh-root /tmp/sshroot

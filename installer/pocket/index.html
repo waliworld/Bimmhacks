@@ -57,6 +57,7 @@
   .notice { background: var(--warn-soft); color: var(--warn); border-radius: 8px; padding: 10px 12px; font-size: 14px; margin: 8px 0; }
   .check { display: flex; align-items: flex-start; gap: 10px; margin: 10px 0 2px; font-size: 15px; }
   .check input { width: 22px; height: 22px; min-height: 0; padding: 0; margin: 1px 0 0; -webkit-appearance: checkbox; appearance: checkbox; flex: none; }
+  .check small { display: block; color: var(--muted); font-size: 13px; margin-top: 2px; }
   details { margin-top: 10px; }
   summary { color: var(--accent); font-size: 14px; cursor: pointer; padding: 6px 0; list-style: none; }
   summary::-webkit-details-marker { display: none; }
@@ -142,16 +143,18 @@
   <section class="card">
     <div class="kicker">Step 2 · on-car store</div>
     <h2>Install the MGU App Store</h2>
-    <p>Then the car browses, installs and updates apps itself (Apps › Store). The <b>car</b> needs internet: USB Ethernet, an LTE stick, a tethered phone or Wi-Fi.</p>
+    <p>Then the car browses, installs and updates apps itself (Apps › Store). It needs internet for that, and the Store only starts after the head unit has restarted.</p>
+    <label class="check"><input type="checkbox" id="renderer" checked><span><b>Renderer</b><small>Draws the Store and other apps with the head unit's graphics chip: smooth, with the on-screen keyboard. Without it the Store falls back to simpler screens.</small></span></label>
+    <label class="check"><input type="checkbox" id="uplink" checked><span><b>Internet uplink</b><small>Gives the car internet through a USB Ethernet adapter, an LTE stick, phone tethering or Wi-Fi, so the Store can download apps. Untick only if you will install from a USB stick.</small></span></label>
+    <label class="check"><input type="checkbox" id="restart" checked><span><b>Restart the head unit when done</b><small>About two minutes; the box waits until the car is back.</small></span></label>
     <div class="btns">
       <button data-run="test">Test connection</button>
       <button data-run="store-install" class="primary">Install the App Store</button>
+      <button data-run="restart" class="wide">Restart head unit</button>
     </div>
     <div class="line" id="storeline">Store package on the box: checking …</div>
     <details>
-      <summary>Store options</summary>
-      <label class="check"><input type="checkbox" id="no_renderer"> Leave out the renderer (the Store draws in software)</label>
-      <label class="check"><input type="checkbox" id="no_uplink"> Leave out the internet uplink component</label>
+      <summary>Store package on the box</summary>
       <div class="btns"><button data-run="stage-store" class="wide">Download the Store package to the box (box online)</button></div>
     </details>
   </section>
@@ -204,9 +207,10 @@
     'root-flash': 'Flash the head unit and enable root SSH?\n\nThis reprograms the unit and WIPES its coding and BMW Digital Key pairings. It reboots and takes a few minutes. Keep the car awake and the box plugged in.',
     'root-fix-key': 'Re-flash to install our root key?\n\nSame as a flash: coding and Digital Key pairings are wiped. Only for a unit whose SSH opens but refuses the login.',
     'root-disable': 'Disable root SSH on the car again?',
-    'store-install': 'Install the MGU App Store on the car?\n\nAfterwards the car needs internet to browse the Store.',
+    'store-install': 'Install the MGU App Store on the car?\n\nThe head unit restarts when it is done if "Restart the head unit when done" is ticked: the screens go dark for about two minutes. Park the car and keep the ignition on.',
+    'restart': 'Restart the head unit now?\n\nThe screens go dark for about two minutes. Do not do this while an install is running, or while driving.',
     'stage-store': 'Download the Store package (and Doom\'s game data) onto this box now?\n\nThe box needs internet for this - join it to a Wi-Fi with internet or plug its Ethernet into your router first.',
-    'add-source': 'Add %s to the car\'s Store?\n\nInstalls the Store first if it is missing. The apps then install from Apps > Store on the car (the car needs internet to read the source).',
+    'add-source': 'Add %s to the car\'s Store?\n\nIf the Store is not on the car yet, or has not started, the head unit restarts once (about two minutes, the screens go dark) so it can. The apps then install from Apps > Store on the car (the car needs internet to read the source).',
     'install-apps': 'Install the recommended apps on the car from this box?\n\nEverything changed is backed up first; the head unit may reboot at the end.',
     'restore': 'Remove ALL custom apps and put every changed file back to stock?'
   };
@@ -289,7 +293,7 @@
     }
     $('#storeline').textContent = s.box.store_staged
       ? 'Store package on the box: ready (installs without internet on the box).'
-      : 'Store package on the box: not downloaded yet - the install fetches it from GitHub, so the box needs internet then (or use the button under Store options while online).';
+      : 'Store package on the box: not downloaded yet - the install fetches it from GitHub, so the box needs internet then (or download it now with the button below while the box is online).';
     var snaps = $('#snaps');
     if (s.snapshots.length) {
       snaps.innerHTML = s.snapshots.slice().reverse().map(function (n) {
@@ -349,7 +353,7 @@
       if (!$('#backup').checked) { toast('Tick the backup confirmation first.', 'err'); return; }
       body.confirm_backup = true;
     }
-    if (action === 'store-install') { body.no_renderer = $('#no_renderer').checked; body.no_uplink = $('#no_uplink').checked; }
+    if (action === 'store-install') { body.no_renderer = !$('#renderer').checked; body.no_uplink = !$('#uplink').checked; body.restart = $('#restart').checked; }
     if (action === 'add-source') {
       body.repo = btn.dataset.repo || (btn.dataset.repoFrom ? $(btn.dataset.repoFrom).value.trim() : '');
       body.channel = btn.dataset.channel || 'releases';

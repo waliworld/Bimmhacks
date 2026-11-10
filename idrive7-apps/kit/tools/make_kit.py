@@ -86,11 +86,18 @@ def ask(why, fallback):
     print('\n!! ' + why)
     if fallback: print('!! The kit would ship kit/renderd/prebuilt/mgu-renderd, which is OLDER than the source.')
     else: print('!! The kit would ship no renderer: the apps then draw in software (PNG, a few fps).')
-    if sys.stdin is not None and sys.stdin.isatty():
-        if input('Continue anyway? [y/N] ').strip().lower() not in ('y', 'yes'):
+    # MGU_NO_DOCKER=1 is set by the Bimmhacks client installer, which has nobody to ask: never prompt there. (On
+    # Windows the NUL device passes as a terminal, so isatty() alone is not enough: input() then died on
+    # end-of-input with an EOFError traceback.)
+    if sys.stdin is not None and sys.stdin.isatty() and not os.environ.get('MGU_NO_DOCKER'):
+        try:
+            answer = input('Continue anyway? [y/N] ')
+        except EOFError:
+            answer = ''                         # nobody answered: that is a no, said cleanly
+        if answer.strip().lower() not in ('y', 'yes'):
             print('stopped - nothing was built or packed'); sys.exit(1)
     else:
-        print('!! (not a terminal: continuing)')
+        print('!! (not asking: continuing)')
     return fallback
 
 

@@ -6,7 +6,7 @@
  * Store client uses (mgu-store: native/mgu-updater/README.md, "The socket") - with the privileged secret
  * the updater leaves in the Store's data folder. The Store then reads the source and shows its apps.
  *
- *   node - <owner/repo> <releases|tags|branch|branch:NAME> [socket] [secret file]
+ *   node - <owner/repo> <releases|tags|branch|branch:NAME> [socket] [secret file] [--wait=<seconds>]
  *
  * Prints one last line and exits:
  *   ADDED <repo> (<channel>)     exit 0
@@ -25,6 +25,15 @@ var raw = process.argv.slice(1);
 if (raw.length && (raw[0] === '-' || /unit_add_source\.js$/.test(raw[0]))) {
     raw = raw.slice(1);
 }
+/* --wait=<seconds>: how long to keep trying for the updater (it needs a while after the head unit starts) */
+var waitSeconds = 0;
+raw = raw.filter(function (a) {
+    var m = /^--wait=(\d+)$/.exec(a);
+    if (m) {
+        waitSeconds = Number(m[1]);
+    }
+    return !m;
+});
 var repo = raw[0] || '';
 var channel = raw[1] || '';
 var SOCK = raw[2] || process.env.MGU_UPDATER_SOCKET || '/dev/shm/mgu-updater/updater.sock';
@@ -32,8 +41,9 @@ var SECRET_ARG = raw[3] || null;
 var OAP = process.env.MGU_OAP_ROOT || '/var/opt/public/oap';     // MainApp's app folders (updater.conf oap_root)
 var MAINAPP_UID = process.env.MGU_MAINAPP_UID || '12201';          // updater.conf mainapp_uid
 var STORE_APP = 'robertn_store';                                    // updater.conf store_app
-var RETRIES = Number(process.env.MGU_ADD_SOURCE_RETRIES || 8);      // tries before "waiting" is reported
 var WAIT_MS = Number(process.env.MGU_ADD_SOURCE_WAIT_MS || 3000);
+var RETRIES = waitSeconds ? Math.max(1, Math.ceil(waitSeconds * 1000 / WAIT_MS))      // tries before "waiting" is reported
+    : Number(process.env.MGU_ADD_SOURCE_RETRIES || 8);
 var ANSWER_MS = Number(process.env.MGU_ADD_SOURCE_ANSWER_MS || 20000);
 
 /* The last line, then exit with the code once stdout has been written (never process.exit(): a pipe can
@@ -90,7 +100,9 @@ function retry(n, why) {
         end(3, 'WAITING: ' + why);
         return;
     }
-    console.log('waiting for the updater: ' + why);
+    if (n % 5 === 0) {                          // a long wait is not 50 identical lines
+        console.log('waiting for the updater: ' + why);
+    }
     setTimeout(function () { attempt(n + 1); }, WAIT_MS);
 }
 

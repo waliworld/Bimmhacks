@@ -21,7 +21,7 @@ jobs:
         run: |
           node idrive7-apps/kit/tools/test_bimmhacks_tuner.js
           node idrive7-apps/kit/tools/test_bimmhacks_pids.js
-      - name: "Installer tests (fake car - coding snapshot, VIN, flash guards, root enable, PID capture)"
+      - name: "Installer tests (fake car - coding snapshot, VIN, flash guards, root enable, PID capture, Pocket, Store sources, restart, no prompts)"
         run: |
           python -m pip install cryptography
           python installer/tests/test_coding_backup.py
@@ -30,6 +30,8 @@ jobs:
           python installer/tests/test_pid_capture.py
           python installer/tests/test_pocket.py
           python installer/tests/test_store_source.py
+          python installer/tests/test_restart.py
+          python installer/tests/test_noninteractive.py
       - name: "Store source-adding against the real mgu-updater (pinned commit)"
         run: |
           git init -q /tmp/mgu-store-src

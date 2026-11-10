@@ -51,7 +51,7 @@ snapshot and the App Store from an iPhone or Android, with the same safety gates
 </tr>
 <tr>
 <td><img src="installer/screenshots/07-apps-connected.png" alt="Apps"><br><sub><b>Apps.</b> Pick the apps and language; the chip shows the car is reachable as root.</sub></td>
-<td><img src="installer/screenshots/10-ridetube-added.png" alt="RideTube added to the Store"><br><sub><b>App Store.</b> Install the Store, and add RideTube to it in one click: it is then a normal download on the car (<a href="installer/screenshots/09-ridetube-confirm.png">confirmation</a>).</sub></td>
+<td><img src="installer/screenshots/10-ridetube-added.png" alt="RideTube added to the Store"><br><sub><b>App Store.</b> Install the Store (renderer, internet uplink and a restart, each explained), and add RideTube to it in one click: it is then a normal download on the car (<a href="installer/screenshots/09-ridetube-confirm.png">confirmation</a>). The Store only starts after a restart, so the installer restarts the head unit for you and waits (<a href="installer/screenshots/10b-restart-confirm.png">confirmation</a>, <a href="installer/screenshots/10c-head-unit-restarted.png">result</a>).</sub></td>
 </tr>
 <tr>
 <td><img src="installer/screenshots/11-more-apps.png" alt="More apps"><br><sub><b>More apps.</b> Cluster &amp; HUD maps, and IterioDev's iDrive 8 apps, both built-in Store sources.</sub></td>
@@ -59,7 +59,7 @@ snapshot and the App Store from an iPhone or Android, with the same safety gates
 </tr>
 </table>
 
-All fourteen steps, and a one-page [overview](installer/screenshots/00-overview.png), are in
+All seventeen steps, and a one-page [overview](installer/screenshots/00-overview.png), are in
 `installer/screenshots/`. They were taken on Linux against the test suite's fake car (no real car), so
 Windows shows the same window in Segoe UI with its native dialogs. Regenerate them with
 `installer/tests/desktop_shots.py`.
@@ -103,7 +103,8 @@ and checks the zip carries no BMW SDK, built apps or client SSH keys. Send the z
 python3 installer/bimmhacks_installer.py backup-coding --out coding-backups   # coding snapshot
 python3 installer/bimmhacks_installer.py root-flash --vin <VIN> --confirm-backup   # enable root SSH (ENET); refuses without the flag
 python3 installer/bimmhacks_installer.py install --key <id_rsa>     # build + install apps
-python3 installer/bimmhacks_installer.py store-install --key <id_rsa>   # install the App Store
+python3 installer/bimmhacks_installer.py store-install --key <id_rsa> --restart   # install the App Store, restart the head unit
+python3 installer/bimmhacks_installer.py restart-head-unit --key <id_rsa>   # restart it (the Store only starts after one)
 python3 installer/bimmhacks_installer.py install-idrive-apps --key <id_rsa>   # cluster/HUD maps
 python3 installer/bimmhacks_installer.py install-our-apps --key <id_rsa> --repo owner/repo
 python3 installer/bimmhacks_installer.py status|restore --key <id_rsa>
