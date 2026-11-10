@@ -33,6 +33,14 @@ gates. Build and use: [docs/POCKET.md](docs/POCKET.md) (`installer/pocket_server
 
 ### A tour of the window
 
+<table>
+<tr>
+<td width="33%"><img src="installer/screenshots/01-root-access.png" alt="Root access"><br><sub><b>Root access.</b> Back up the coding, flash + enable SSH; the experimental coding-restore card is on the right.</sub></td>
+<td width="33%"><img src="installer/screenshots/02-app-store.png" alt="App Store"><br><sub><b>App Store.</b> Install the on-car Store and restart the head unit; add RideTube or your own repo as a source.</sub></td>
+<td width="33%"><img src="installer/screenshots/03-credits.png" alt="Credits"><br><sub><b>Credits.</b> The people and projects behind every part.</sub></td>
+</tr>
+</table>
+
 Three tabs, worked left to right — nothing else:
 
 - **Root access.** Detect the VIN by broadcast, **back up the coding** over ENET, then **Flash + enable
