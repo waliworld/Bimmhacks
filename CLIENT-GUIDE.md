@@ -41,26 +41,32 @@ with *Browse* (the IP address is filled in from the key's `connect.txt`).
 > ⚠️ **Flashing reprograms the head unit and wipes its coding and BMW Digital Key pairings.**
 > Back up the coding first, and plan to re-pair digital keys. This is a one-time step; do not repeat it.
 
-**Back up the coding first.** Click **Back up coding**. It reads the car over ENET and saves, under
+**Back up the coding first.** Click **Back up coding**. In one pass over ENET it saves, under
 `coding-backups/`:
 
-- which **CAFD coding versions**, VIN, IP and faults are on the car — *what to restore*; and
-- where the unit hands it over, the **coding data (NCD) itself**, as E-Sys-compatible `.ncd` files —
-  *the coding to restore*. (Some units do not expose it; the snapshot still succeeds.)
+- a **read-only coding backup** — the unit's coding store and identification, read twice and verified,
+  written as `coding_MGU.txt` with a `RESTORE.txt` that tells you how to put the coding back after a
+  flash (re-code HU_MGU **by vehicle order / "code by FA"** in E-Sys or BimmerCode — the reliable way);
+- which **CAFD coding versions**, VIN, IP and faults are on the car; and
+- where the unit hands it over, the **coding data (NCD)** as E-Sys-compatible `.ncd` files, for the
+  experimental restore. (Some units do not expose the NCD; the backup still succeeds.)
 
-Then tick **"I have a coding backup (this tool, BimmerCode / E-Sys or Autel)"**. **Flash** refuses,
-with a reminder, until you do. Having BimmerCode / E-Sys / Autel as a fallback is strongly advised.
+Having BimmerCode / E-Sys / Autel as a fallback is strongly advised.
 
 Then:
 
 1. Connect the ENET cable, wake the car.
 2. Click **Detect VIN** (or type the 17-char VIN). Pick the **Head unit** (id7 for iDrive 7).
-3. Take the backup above and tick the confirmation box.
-4. Click **Flash + enable SSH** and confirm. The unit reboots; this takes a few minutes.
+3. Click **Flash + enable SSH**. **It will not flash without a coding backup:** a dialog asks you to
+   either **back it up now** (recommended — it runs the backup above, then flashes) or, if you choose to
+   skip, to **confirm a warning** that you already have a backup from BimmerCode / E-Sys / Autel.
+4. The unit reboots; this takes a few minutes.
 5. When it finishes, the car's SSH key **and** its IP address are filled into the Car panel
    automatically (the root tool reads the head unit's address from the car itself).
    - **Enable (repair)**: re-opens SSH on an already-flashed car whose SSH stopped — no flashing.
-   - **Fix refusing key**: only if SSH opens but login is refused (also needs the backup confirmation).
+   - **Fix refusing key**: only if SSH opens but login is refused (re-flashes, so it forces a backup too).
+   - **Fix blue screen**: recovery — if a unit is stuck on the blue programming screen, this leaves
+     programming mode and reboots it to normal. No flash, no write.
    - **Check state**: read-only; changes nothing.
    - **Disable**: closes root SSH again.
 

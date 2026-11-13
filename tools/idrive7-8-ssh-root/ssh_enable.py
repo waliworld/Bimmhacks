@@ -12,7 +12,7 @@ else:
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
 from mgu7 import assets as assets_mod
-from mgu7 import diag, discovery, enroll, flash, hsfz, identity as identity_mod, sshcli
+from mgu7 import diag, discovery, enroll, flash, hsfz, identity as identity_mod, preflight, sshcli
 from mgu7.flash import ID7, ID8_BDC3, ID8_BCP
 EXIT_OK = 0
 EXIT_ERROR = 1
@@ -172,12 +172,20 @@ class Tool:
         log('Status: debug/SSH-open state is', 'ON' if state.get('dtc_debug') else 'OFF (or not reported)' if state.get('dtcs') is None else 'OFF')
         return state
 
+    def preflight(self):
+        self.connect()
+        out_root = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'preflight')
+        result = preflight.backup(self.client, self.svk, out_root, vin=self.vin, log=log)
+        log('Coding backup written to %s' % result['folder'])
+        if not result['verified']:
+            log('WARNING: the coding read is incomplete or did not verify - do not rely on it as your only backup.')
+            return EXIT_ERROR
+        log('Done. Copy this folder off the machine before flashing.')
+        log('After flashing, re-code HU_MGU by vehicle order (E-Sys/BimmerCode); see RESTORE.txt in the folder.')
+        return EXIT_OK
+
     def close(self):
         self.connect()
-        if not self.args.yes:
-            answer = input('Stop the MGU debug/SSH service (31 02 A0 FD)? [y/N] ').strip().lower()
-            if answer not in ('y', 'yes'):
-                raise SystemExit('Aborted.')
         log('Stopping the MGU SSH service (31 02 A0 FD)...')
         result = diag.close_ssh(self.client)
         log('Close routine result:', result)
@@ -185,6 +193,46 @@ class Tool:
             time.sleep(2.0)
             log("Note: after closing, the SSH state clears on the next service cycle; the port probe is best re-run with 'status'.")
         return result
+
+    def enter_prog(self):
+        self.connect()
+        args = self.args
+        material = self.assets.raw(int(flash.CONTRACTS[args.arch][3]))
+        vin = args.vin or self.vin or 'WBA00000000000000'  # never sent: the VIN write is far past the stop point
+        data = flash.FlashData.build(args.arch, vin, material)
+        prog_index = next((i for i, f in enumerate(data.frames) if f.payload == bytes((0x10, 0x02))), None)
+        if prog_index is None:
+            raise SystemExit('No programming-session (10 02) frame found in the %s contract.' % args.arch)
+        log('Entering programming mode via the proven %s preamble (frames 1-%d: extended '
+            'session, DTC off, communication control, programming-precondition routines, '
+            'ECU reset, readiness wait, then 10 02). No flash write, no SecurityAccess and '
+            'no VIN are sent - it stops the moment the programming session is entered.'
+            % (data.label, prog_index + 1))
+        engine = flash.FlashEngine(self.client, None, gate=lambda: (self.svk is not None and self.svk.is_supported_mgu()) or args.force)
+        counters = []
+
+        def progress(human, count, percent, part, kind, text):
+            line = 'Frame %d/%d; %s; %s' % (human, count, kind, text)
+            if not counters or counters[-1] != line:
+                log(line)
+                counters.append(line)
+        result = engine.run(data, progress, stop_after=prog_index)
+        log(result.summary())
+        log('The MGU is now in the programming session (blue programming screen).')
+        log('Note: with no further traffic the session lapses back to normal after a few '
+            'seconds (UDS S3 timeout) - that is harmless. To deliberately leave it and '
+            'reboot to normal operation now, run "exit-prog".')
+        return EXIT_OK
+
+    def exit_prog(self):
+        self.connect()
+        log('Leaving programming mode the way the flash tail does: deactivate programming '
+            '(31 01 0F 0C 00), finish-programming routine (31 01 10 0F), then ECU reset (11 01)...')
+        status = diag.exit_programming(self.client)
+        log('Programming mode off: %s | finish: %s | ECU reset: %s'
+            % (status.get('prog_mode_off'), status.get('finish'), status.get('reset')))
+        log('The MGU reboots into normal operation; give it ~30 s to come back, then re-run "status" to confirm it is off the blue screen.')
+        return EXIT_OK
 
     def wake_daemon(self, host):
         log('Initial SSH connection unavailable at %s:22 - restarting MGU (11 01) and waiting 15 seconds.' % host)
@@ -576,10 +624,6 @@ class Tool:
         if self.mgu_ip:
             self.probe(self.mgu_ip)
         log('Flash mode: writing the %s debug image.' % ('MGU ID7 (BDC2/BDC3)' if arch == ID7 else arch))
-        if not args.yes:
-            answer = input('Flash the %s debug image now? The MGU switches into programming mode and reboots.\nVIN %s will be written to the unit. [y/N] ' % ('MGU ID7 (BDC2/BDC3)' if arch == ID7 else arch, vin)).strip().lower()
-            if answer not in ('y', 'yes'):
-                raise SystemExit('Aborted.')
         self.do_flash()
         log('Enrolling this unit (A6 71 challenge -> certificate -> A0 FD install)...')
         identity = self.do_enroll()
@@ -632,13 +676,6 @@ class Tool:
             'changes the bytes of the one unsigned region, so the realistic worst '
             'case is that the key does not persist - not a brick. Like any flash '
             'it clears CAFD coding; restore it from your backup afterwards.')
-        if not args.yes:
-            answer = input('Flash the %s debug image now, carrying our SSH key into '
-                           'the unsigned region? The MGU switches into programming '
-                           'mode and reboots.\nVIN %s will be written to the unit. '
-                           '[y/N] ' % (label, vin)).strip().lower()
-            if answer not in ('y', 'yes'):
-                raise SystemExit('Aborted.')
         self.do_flash(add_key=True)
         log('Enrolling this unit (A6 71 challenge -> certificate -> A0 FD install)...')
         identity = self.do_enroll()
@@ -851,13 +888,13 @@ class Tool:
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description='MGU ID7/ID8 SSH enable, status and close tool (flash-debug-mode + SSH-identity enroll).')
-    parser.add_argument('action', choices=('enable', 'flash', 'fix-key', 'close', 'disable', 'status', 'persist'), help='enable = enroll-only (re-open SSH on an already-flashed unit, no flashing); flash = flash the debug image + enroll; fix-key = re-flash carrying our root key in the unsigned region (repair for units that enroll + open port 22 but refuse login because their stock authorized_keys.root holds a different key - issue #2); persist = make SSH start on every boot then turn debug mode off (clears the B7F8E5 DTC); disable = revert persistence + stop debug/SSH; close = stop debug/SSH; status = read state')
+    parser.add_argument('action', choices=('enable', 'flash', 'fix-key', 'close', 'disable', 'status', 'persist', 'preflight', 'enter-prog', 'exit-prog'), help='enable = enroll-only (re-open SSH on an already-flashed unit, no flashing); flash = flash the debug image + enroll; fix-key = re-flash carrying our root key in the unsigned region (repair for units that enroll + open port 22 but refuse login because their stock authorized_keys.root holds a different key - issue #2); persist = make SSH start on every boot then turn debug mode off (clears the B7F8E5 DTC); disable = revert persistence + stop debug/SSH; close = stop debug/SSH; status = read state; preflight = back up the MGU coding read-only over ENET before flashing (no extra adapter); enter-prog = put the MGU into the programming session (10 02); exit-prog = leave programming mode and reboot to normal (10 01 + 11 01) - recovery if a unit is stuck on the blue programming screen')
     parser.add_argument('--gateway', default='auto', help="ENET gateway/ZGW address, or 'auto' for UDP 6811 broadcast discovery (default: %(default)s)")
     parser.add_argument('--vin', help='17-char VIN (required for enable; written to the MGU with 2E F1 90)')
     parser.add_argument('--arch', default=ID7, choices=(ID7, ID8_BDC3, ID8_BCP), help='head-unit variant (default: %(default)s)')
     parser.add_argument('--mgu-ip', help='MGU IP override for the SSH probe/enroll verification (default: read via 22 17 2A)')
     parser.add_argument('--restart-wait', type=int, default=20, help='seconds to wait after the flash before enrolling (default: %(default)s)')
-    parser.add_argument('--yes', action='store_true', help='do not ask for confirmation')
+    parser.add_argument('--yes', action='store_true', help='(kept for compatibility) the tool no longer prompts for confirmation')
     parser.add_argument('--reflash', action='store_true', help="(kept for compatibility) 'flash' now always flashes explicitly")
     parser.add_argument('--force', action='store_true', help='skip the BTLD 00003F36 gate')
     parser.add_argument('--unique-key', action=argparse.BooleanOptionalAction, default=False, help="give this car its OWN unique SSH key (advanced, OFF by default, NOT recommended): after enrolling with the shared dev key, generate a per-car key, add it to the unit's authorized_keys over SSH, verify it, then remove the shared dev key. This can only be done ONCE - after a reflash or a lost key you cannot create a new identity. Default keeps the shared dev key")
@@ -886,6 +923,12 @@ def main(argv=None):
             return tool.persist()
         elif args.action == 'disable':
             return tool.disable()
+        elif args.action == 'preflight':
+            return tool.preflight()
+        elif args.action == 'enter-prog':
+            return tool.enter_prog()
+        elif args.action == 'exit-prog':
+            return tool.exit_prog()
         else:
             return tool.enable()
     except KeyboardInterrupt:

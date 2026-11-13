@@ -55,10 +55,18 @@ class FakeCar:
     # little coding data for each CAFD so backup->restore round-trips.
     NCD_BASE = 0xF5A0
 
+    # the root tool's read-only preflight backup scans the coding store 0x3000-0x3FFF and identification
+    # 0xF100-0xF1FF (ReadDataByIdentifier). A few contiguous blocks so the scan's silent-run cutoff does
+    # not stop it early; absent DIDs fall through to the normal negative reply.
+    CODING_STORE = {0x3000: b'\x11\x22\x33', 0x3001: b'\xAA\xBB', 0x3002: b'\x01',
+                    0x3003: b'\xDE\xAD\xBE\xEF', 0x3004: b'\x00', 0x3005: b'\x7F\x7F'}
+    IDENT_STORE = {0xF100: b'\x01\x02', 0xF102: b'\x03'}
+
     def __init__(self, vin='WBA12345678901234', svk=None, dtcs=None, mgu_ip='169.254.36.47',
                  host='127.0.0.1', tcp_port=6801, udp_port=6811, ssh_port=None, debug_on=True,
-                 ncd=None, coding_write=True):
+                 ncd=None, coding_write=True, coding_store=None):
         self.vin = vin
+        self.coding_store = dict(self.CODING_STORE if coding_store is None else coding_store)
         self.svk = DEFAULT_SVK if svk is None else svk
         self.dtcs = [('480A01', 0x09)] if dtcs is None else list(dtcs)
         self.debug_on = debug_on                  # the B7F8E5 DTC is reported while this is on
@@ -163,6 +171,11 @@ class FakeCar:
             return bytes((0x6E, payload[1], payload[2]))
         if sid == 0x10 and len(payload) >= 2:
             return bytes((0x50, payload[1], 0x00, 0x32, 0x01, 0xF4))
+        if sid == 0x22 and len(payload) == 3:                 # coding store / identification read (preflight)
+            did = payload[1] << 8 | payload[2]
+            store = self.coding_store if 0x3000 <= did <= 0x3FFF else self.IDENT_STORE
+            if did in store:
+                return bytes((0x62, payload[1], payload[2])) + store[did]
         if sid == 0x3E:
             return b'\x7E\x00'
         return bytes((0x7F, sid, 0x11))                       # service not supported

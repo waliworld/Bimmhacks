@@ -31,7 +31,7 @@ it. Stage C (App Store) needs internet at the car (or a prepared USB stick).
 """
 import argparse, json, os, queue, re, shutil, stat, subprocess, sys, tempfile, threading, time
 
-VERSION = '1.9.0'
+VERSION = '1.10.0'
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 DEFAULT_IP = '169.254.36.47'                # the unit's address with the idrive7-8-ssh-root tool
@@ -353,7 +353,9 @@ def do_root(action, log, vin=None, ip=None, gateway='auto', arch='id7', backup_c
              'flash': 'Flashing the debug image and enabling root SSH (this reboots the unit; a few minutes) ...',
              'enable': 'Re-opening SSH on an already-flashed unit (no flashing) ...',
              'fix-key': 'Re-flashing to install our root key (repair for refused logins) ...',
-             'disable': 'Reverting persistence and stopping debug/SSH ...'}
+             'disable': 'Reverting persistence and stopping debug/SSH ...',
+             'enter-prog': 'Putting the head unit into the programming session (no flash, no write) ...',
+             'exit-prog': 'Leaving programming mode and rebooting to normal (recovery for a stuck blue screen) ...'}
     log(names.get(action, 'Running root-access action: %s' % action))
     code = run_ssh_root(action, log, vin=vin, ip=ip, gateway=gateway, arch=arch,
                         persist=(action in ('flash', 'enable', 'fix-key')))
@@ -1112,8 +1114,9 @@ def run_gui():
     title(c1, 'Back up the coding, then root over ENET')
     para(c1, 'Wired ENET cable, ignition on. Already rooted and holding the key? Skip this and pick the key '
              'with Browse above - the tool reads the head unit\'s address from the car, and fills the IP in.', wrap=400)
-    notice(c1, 'Flashing reprograms the head unit and wipes its coding and BMW Digital Key pairings. Back up the '
-               'coding first (below); re-pair keys after. Windows: run as Administrator.', wrap=500)
+    notice(c1, 'Flashing reprograms the head unit and wipes its coding and BMW Digital Key pairings. Flash + enable '
+               'SSH takes a coding backup first (or you confirm you have one from another tool); re-pair keys after. '
+               'Windows: run as Administrator.', wrap=500)
     backup_done = tk.BooleanVar(value=False)
     gchk = row(c1, pady=(8, 0))
     ttk.Checkbutton(gchk, variable=backup_done,
@@ -1143,14 +1146,42 @@ def run_gui():
 
     def on_root(action, confirm=None, need_backup=False):
         vin, _, _, arch = conn_values()
-        if need_backup and not backup_done.get():
-            messagebox.showwarning('Back up first', 'Save a coding backup before flashing.\n\nClick "Back up '
-                                   'coding", or take a BimmerCode / E-Sys / Autel backup, then tick the box.')
-            return
+        backup_first = False
+        confirmed = backup_done.get()
+        if need_backup and not confirmed:
+            # force a coding backup, or make the client explicitly accept flashing without one
+            ans = messagebox.askyesnocancel(
+                'Coding backup required',
+                'Flashing WIPES the head unit\'s coding and BMW Digital Key pairings.\n\n'
+                'Back up the coding now, before flashing?\n\n'
+                '  Yes  -  back it up now with this tool (recommended)\n'
+                '  No   -  flash WITHOUT a Bimmhacks backup\n'
+                '  Cancel  -  do not flash')
+            if ans is None:
+                return
+            if ans:
+                backup_first = True
+                confirmed = True
+            else:
+                if not messagebox.askokcancel(
+                        'Flash without a backup?',
+                        'You are about to flash WITHOUT a coding backup from this tool.\n\n'
+                        'You MUST already have a coding backup made with another tool - BimmerCode, E-Sys or '
+                        'Autel. The flash wipes the coding and it CANNOT be restored without one; without it the '
+                        'head unit can be left partly-coded.\n\nFlash anyway?', icon='warning'):
+                    return
+                confirmed = True
         if confirm and not messagebox.askyesno('Root access', confirm):
             return
         def w():
-            key = do_root(action, log, vin=vin or None, arch=arch, backup_confirmed=backup_done.get())
+            if backup_first:
+                log('Backing up the coding before the flash ...')
+                path = do_backup_coding(log, vin=vin or None, arch=arch)
+                ui_set(backup_done, True)
+                if path and path.endswith('.txt'):
+                    ui_set(restore_var, path[:-4] + '.json')
+                log('Backup done. Proceeding to flash.')
+            key = do_root(action, log, vin=vin or None, arch=arch, backup_confirmed=confirmed)
             if key:
                 ui_set(key_var, key)
                 got = ip_from_key(key)
@@ -1173,6 +1204,10 @@ def run_gui():
            'Re-flash to install our root key? Use only if SSH opens but login is refused. It re-flashes '
            '(wipes coding again).', need_backup=True))
     button(rr3, 'Disable', lambda: on_root('disable', 'Revert persistence and stop debug/SSH on this car?'), style='Danger.TButton')
+    rr4 = row(c1, pady=(0, 6))
+    button(rr4, 'Fix blue screen', lambda: on_root('exit-prog',
+           'Head unit stuck on the blue programming screen? Leave programming mode and reboot it to normal.\n\n'
+           'No flash and no write - it just sends the end-of-programming routines and restarts the unit.'))
 
     # ---- right: experimental coding restore -------------------------------------------------------
     c1b = card(r1c, pady=(0, 10), padx=(6, 22))
@@ -1419,7 +1454,8 @@ def _open_path(path):
 # ----------------------------------------------------------------------------- command line
 
 ROOT_ACTIONS = {'root-status': 'status', 'root-flash': 'flash', 'root-enable': 'enable',
-                'root-fix-key': 'fix-key', 'root-disable': 'disable'}
+                'root-fix-key': 'fix-key', 'root-disable': 'disable',
+                'root-enter-prog': 'enter-prog', 'root-exit-prog': 'exit-prog'}
 
 
 def main(argv=None):
@@ -1427,6 +1463,7 @@ def main(argv=None):
     ap.add_argument('action', nargs='?', default='gui',
                     choices=['gui',
                              'root-status', 'root-flash', 'root-enable', 'root-fix-key', 'root-disable',
+                             'root-enter-prog', 'root-exit-prog',
                              'detect-vin', 'backup-coding', 'verify-coding', 'restore-coding',
                              'test', 'store-install', 'restart-head-unit',
                              'install-ridetube', 'install-idrive-apps', 'install-car-apps', 'install-our-apps',

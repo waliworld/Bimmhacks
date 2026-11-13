@@ -102,6 +102,24 @@ class CodingSnapshot(unittest.TestCase):
         self.assertIn('CAFD_000000AC', text)
         self.assertIn('DID capture the coding data', text)
 
+    def test_preflight_read_only_coding_backup_is_taken(self):
+        # with preflight_out set, the backup also takes the root tool's read-only coding-store backup
+        # (coding 0x3000-0x3FFF + identification, read twice and verified) with its RESTORE.txt
+        with FakeCar(vin=VIN):
+            snap = coding_backup.collect(gateway='127.0.0.1', vin=VIN, log=quiet, preflight_out=self.out)
+        pf = snap.get('preflight')
+        self.assertIsNotNone(pf)
+        self.assertTrue(pf['verified'], 'the coding read twice and matched')
+        self.assertEqual(pf['coding_blocks'], len(FakeCar.CODING_STORE))
+        folder = os.path.join(self.out, pf['folder'])
+        for name in ('RESTORE.txt', 'coding_MGU.txt', 'backup.json', 'SHA256SUMS'):
+            self.assertTrue(os.path.isfile(os.path.join(folder, name)), name + ' written')
+        with open(os.path.join(folder, 'RESTORE.txt')) as f:
+            restore = f.read()
+        self.assertIn('vehicle order', restore)          # the RESTORE note steers to VO / code-by-FA
+        with open(os.path.join(folder, 'coding_MGU.txt')) as f:
+            self.assertIn('3000: 112233', f.read())       # a coding block, byte for byte
+
     def test_snapshot_is_read_only_on_the_wire(self):
         with FakeCar(vin=VIN) as car:
             coding_backup.collect(gateway='127.0.0.1', vin=VIN, log=quiet)
@@ -150,6 +168,19 @@ class RootToolAgainstFakeCar(unittest.TestCase):
         self.assertIn('B7F8E5', r.stdout)                                  # it reported the debug-state DTC
         self.assertTrue(services <= {0x22, 0x19, 0x31}, 'status sent %s' % sorted(hex(s) for s in services))
         self.assertNotIn(0x2E, services)                                   # status never writes
+
+    def test_exit_prog_recovery_sends_only_routines_and_reset(self):
+        # the new recovery command (for a unit stuck on the blue programming screen): it sends the
+        # end-of-programming routines + ECU reset, never a flash write
+        with FakeCar(vin=VIN) as car:
+            r = subprocess.run([sys.executable, os.path.join(SSHROOT, 'ssh_enable.py'), 'exit-prog', '--gateway',
+                                '127.0.0.1', '--mgu-ip', '127.0.0.1', '--no-log'], cwd=SSHROOT,
+                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True, timeout=90)
+            services = car.services()
+        self.assertEqual(r.returncode, 0, r.stdout[-600:])
+        self.assertTrue(services <= {0x22, 0x31, 0x11}, 'exit-prog sent %s' % sorted(hex(s) for s in services))
+        self.assertNotIn(0x2E, services)                                   # never writes coding
+        self.assertNotIn(0x34, services)                                   # never a RequestDownload (flash)
 
     @unittest.skipUnless(BROADCAST, 'this machine does not receive its own UDP broadcast')
     def test_detect_vin_reads_the_vin_the_car_reports(self):

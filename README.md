@@ -8,13 +8,17 @@ from the car's own screen.
 
 - **Root access** — back up the coding, then enable root SSH over an ENET cable with the bundled
   [idrive7-8-ssh-root](https://github.com/cauliflowermossgrape/idrive7-8-ssh-root) tool (one flash
-  per car; it writes the car's SSH key the rest of the flow uses). A flash **wipes the coding**, so the
-  tool refuses to flash until you confirm a coding backup, and this version can take one for you.
-- **Coding backup & restore (experimental)** — **Back up coding** reads the unit over ENET and saves
-  the CAFD coding versions, VIN, faults and, where the unit hands it over, the coding data (NCD) itself
-  as E-Sys-compatible `.ncd` files. The **restore** card can write that captured coding back after a
-  flash and read it back to verify — gated, with Verify and Dry-run modes that never write. Keep
-  BimmerCode / E-Sys / Autel ready: a wrong coding write can leave the HMI partly-coded.
+  per car; it writes the car's SSH key the rest of the flow uses). A flash **wipes the coding**, so
+  **Flash + enable SSH forces a coding backup first**: it offers to take one now, and if you skip it you
+  must confirm, in a warning, that you already have a backup from another tool. A unit stuck on the blue
+  programming screen is recovered with **Fix blue screen** (the root tool's `exit-prog`, no flash).
+- **Coding backup & restore** — **Back up coding** reads the unit over ENET into `coding-backups/` and,
+  in one pass, writes two records: the root tool's **read-only coding backup** (the coding store
+  0x3000-0x3FFF + identification, read twice and verified, with a `RESTORE.txt` that steers restore to
+  VO / code-by-FA re-coding — the reliable path), and, where the unit hands it over, the per-CAFD coding
+  data (NCD) as E-Sys-compatible `.ncd` files for the **experimental restore** card (Verify / Dry run /
+  Restore, gated, read-back verified). Keep BimmerCode / E-Sys / Autel ready: a wrong coding write can
+  leave the HMI partly-coded, and VO re-coding is the dependable restore.
 - **App Store** — install the on-car [mgu-store](https://github.com/robertnisipeanu/mgu-store) (its
   renderer and internet uplink), restart the head unit so it comes up, and add **RideTube** (and your
   own GitHub repo) to the Store's sources in one click. From there the client browses, installs and
@@ -44,9 +48,10 @@ gates. Build and use: [docs/POCKET.md](docs/POCKET.md) (`installer/pocket_server
 Three tabs, worked left to right — nothing else:
 
 - **Root access.** Detect the VIN by broadcast, **back up the coding** over ENET, then **Flash + enable
-  SSH** (gated: it refuses until you confirm you have a coding backup, and says what the flash wipes).
-  The card on the right is the experimental **coding restore** — Verify / Dry run / Restore, which can
-  write the captured coding (NCD) back after a flash and read it back to check.
+  SSH** — which forces a backup first (take one now, or confirm a warning that you have one from another
+  tool). **Fix blue screen** recovers a unit stuck in programming mode. The card on the right is the
+  experimental **coding restore** — Verify / Dry run / Restore, which can write the captured coding (NCD)
+  back after a flash and read it back to check.
 - **App Store.** Install the on-car MGU **App Store** (its renderer and internet uplink, each explained),
   and the installer restarts the head unit for you so the Store comes up. Add **RideTube** (and your own
   repo) to it in one click — from there every app installs on the car, from the Store.
@@ -58,9 +63,17 @@ same window in Segoe UI with its native dialogs. Regenerate it with `installer/t
 
 ## Backing up the coding
 
-Before any flash, **Back up coding** reads the car over ENET into `coding-backups/`: the CAFD coding
-versions, VIN, IP and faults (*what to restore*) and, where the unit hands it over, the coding data
-(NCD) itself as E-Sys-compatible `.ncd` files (*the coding to restore*).
+Before any flash, **Back up coding** reads the car over ENET into `coding-backups/`, in one pass:
+- the root tool's **read-only coding backup** — the coding store (DID 0x3000-0x3FFF) and identification,
+  read twice and compared, written as `coding_MGU.txt` with a `RESTORE.txt` that steers restore to
+  **VO / code-by-FA re-coding** in E-Sys or BimmerCode (the dependable path — a whole-blob write-back can
+  leave settings resetting, upstream issue #10);
+- the CAFD coding versions, VIN, IP and faults (*what to restore*); and
+- where the unit hands it over, the per-CAFD coding data (NCD) as E-Sys-compatible `.ncd` files
+  (*the coding to write back* for the experimental restore).
+
+**Flashing forces this backup**: *Flash + enable SSH* offers to take it now, and if you skip it you must
+acknowledge a warning that you already have a backup from BimmerCode / E-Sys / Autel.
 
 The **restore** is experimental and safe-by-construction: it only ever writes back the exact NCD it
 read, only to the coding identifiers it read, gates on a CAFD-versions-and-VIN match, requires a typed
@@ -111,6 +124,7 @@ python3 installer/bimmhacks_installer.py verify-coding --backup <backup.json>   
 python3 installer/bimmhacks_installer.py restore-coding --backup <backup.json> --dry-run   # show, write nothing
 python3 installer/bimmhacks_installer.py restore-coding --backup <backup.json> --confirm-restore  # EXPERIMENTAL write-back
 python3 installer/bimmhacks_installer.py root-flash --vin <VIN> --confirm-backup   # enable root SSH (ENET); refuses without the flag
+python3 installer/bimmhacks_installer.py root-exit-prog --ip <ip>   # recovery: leave programming mode (stuck blue screen); no flash
 python3 installer/bimmhacks_installer.py store-install --key <id_rsa> --restart    # install the App Store, restart the head unit
 python3 installer/bimmhacks_installer.py restart-head-unit --key <id_rsa>          # restart it (the Store only starts after one)
 python3 installer/bimmhacks_installer.py install-ridetube --key <id_rsa>           # add RideTube to the Store's sources

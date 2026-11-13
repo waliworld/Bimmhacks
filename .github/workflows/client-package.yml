@@ -26,6 +26,7 @@ jobs:
           python -m pip install cryptography
           python installer/tests/test_coding_backup.py
           python installer/tests/test_coding_restore.py
+          python tools/idrive7-8-ssh-root/tests/test_preflight.py
           python installer/tests/test_guards.py
           python installer/tests/test_root_enable.py
           python installer/tests/test_pid_capture.py

@@ -18,13 +18,23 @@ This project bundles three upstream repositories, each copied unchanged except w
 ## 2. `tools/idrive7-8-ssh-root/` — root access over ENET
 
 - **Repository:** https://github.com/cauliflowermossgrape/idrive7-8-ssh-root
-- **Commit:** `1d3ba60a9aa8a79fe16e1c26488a89918ec1d928`
+- **Commit:** `6d4928e6dca9812e7882318afdd7cba9840c2d62` (2026-11-13). Previously `1d3ba60`; this re-sync
+  brings their new work: `mgu7/preflight.py` (a read-only coding backup before flashing — scans the
+  coding store 0x3000-0x3FFF + identification over ENET, reads twice and verifies, writes
+  `coding_MGU.txt` + a `RESTORE.txt` that steers restore to VO / code-by-FA re-coding, issue #10),
+  the `enter-prog` / `exit-prog` recovery commands (`mgu7/diag.exit_programming`,
+  `flash.run(stop_after=)`) for a unit stuck on the blue programming screen, and the removal of the
+  interactive y/n prompts (the tool is driven non-interactively here). Their GUI redesign is vendored
+  but unused — the Bimmhacks installer is the front end.
 - **Licence:** The Unlicense (public domain) — `tools/idrive7-8-ssh-root/LICENSE`.
 - Copied unchanged, minus `build/`, `dist/`, `data/enrollments/`, `data/logs/` and caches. The
   shared flash assets in `data/assets/` are kept (the tool needs them). Per-car SSH keys the tool
   writes to `data/enrollments/<VIN>/` are never committed or shipped.
 - The installer calls its `ssh_enable.py` as a subprocess; it needs the `cryptography` Python
   package, which the installer installs on demand (`pip install --user cryptography`).
+- `installer/coding_backup.py` reuses `mgu7.preflight.backup` over its own ENET connection, so one
+  "Back up coding" produces both our NCD files and the root tool's read-only coding record. The
+  vendored `tools/idrive7-8-ssh-root/tests/test_preflight.py` validates preflight directly in CI.
 
 ## 3. `tools/mgu-store/` — the on-car App Store
 
