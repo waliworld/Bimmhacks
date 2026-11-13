@@ -12,13 +12,16 @@ from the car's own screen.
   **Flash + enable SSH forces a coding backup first**: it offers to take one now, and if you skip it you
   must confirm, in a warning, that you already have a backup from another tool. A unit stuck on the blue
   programming screen is recovered with **Fix blue screen** (the root tool's `exit-prog`, no flash).
-- **Coding backup & restore** — **Back up coding** reads the unit over ENET into `coding-backups/` and,
-  in one pass, writes two records: the root tool's **read-only coding backup** (the coding store
-  0x3000-0x3FFF + identification, read twice and verified, with a `RESTORE.txt` that steers restore to
-  VO / code-by-FA re-coding — the reliable path), and, where the unit hands it over, the per-CAFD coding
-  data (NCD) as E-Sys-compatible `.ncd` files for the **experimental restore** card (Verify / Dry run /
-  Restore, gated, read-back verified). Keep BimmerCode / E-Sys / Autel ready: a wrong coding write can
-  leave the HMI partly-coded, and VO re-coding is the dependable restore.
+- **Coding backup** — two independent backups, your choice:
+  - **Back up coding** — our NCD backup: reads the CAFD coding versions, VIN, faults and, where the unit
+    hands it over, the per-CAFD coding data (NCD) as E-Sys-compatible `.ncd` files. These feed the
+    **experimental restore** card (Verify / Dry run / Restore, gated, read-back verified) that can write
+    the coding back.
+  - **Read-only backup** — the root tool's read-only coding backup: scans the coding store
+    (0x3000-0x3FFF) + identification, reads twice and verifies, and writes `coding_MGU.txt` +
+    a `RESTORE.txt` that steers restore to VO / code-by-FA re-coding. It never writes to the car.
+  - Keep BimmerCode / E-Sys / Autel ready: a wrong coding write can leave the HMI partly-coded, and VO
+    re-coding is the dependable restore.
 - **App Store** — install the on-car [mgu-store](https://github.com/robertnisipeanu/mgu-store) (its
   renderer and internet uplink), restart the head unit so it comes up, and add **RideTube** (and your
   own GitHub repo) to the Store's sources in one click. From there the client browses, installs and
@@ -63,17 +66,21 @@ same window in Segoe UI with its native dialogs. Regenerate it with `installer/t
 
 ## Backing up the coding
 
-Before any flash, **Back up coding** reads the car over ENET into `coding-backups/`, in one pass:
-- the root tool's **read-only coding backup** — the coding store (DID 0x3000-0x3FFF) and identification,
-  read twice and compared, written as `coding_MGU.txt` with a `RESTORE.txt` that steers restore to
-  **VO / code-by-FA re-coding** in E-Sys or BimmerCode (the dependable path — a whole-blob write-back can
-  leave settings resetting, upstream issue #10);
-- the CAFD coding versions, VIN, IP and faults (*what to restore*); and
-- where the unit hands it over, the per-CAFD coding data (NCD) as E-Sys-compatible `.ncd` files
-  (*the coding to write back* for the experimental restore).
+There are two independent coding backups in `coding-backups/`, and you can take either or both:
 
-**Flashing forces this backup**: *Flash + enable SSH* offers to take it now, and if you skip it you must
-acknowledge a warning that you already have a backup from BimmerCode / E-Sys / Autel.
+- **Back up coding** (our NCD backup) — the CAFD coding versions, VIN, IP and faults, and where the unit
+  hands it over, the per-CAFD coding data (NCD) as E-Sys-compatible `.ncd` files. This is *the coding to
+  write back* for the experimental restore card, which stays exactly as it was: write back the NCD it
+  read, gated on a CAFD-versions-and-VIN match, a typed confirmation, with Verify / Dry run (never write)
+  and a read-back check.
+- **Read-only backup** (the root tool's preflight) — scans the coding store (DID 0x3000-0x3FFF) and
+  identification, reads twice and compares, and writes `coding_MGU.txt` with a `RESTORE.txt` that steers
+  restore to **VO / code-by-FA re-coding** in E-Sys or BimmerCode (the dependable path — a whole-blob
+  write-back can leave settings resetting, upstream issue #10). It never writes to the car.
+
+**Flashing forces a backup**: *Flash + enable SSH* offers to take the NCD backup now, and if you skip it
+you must acknowledge a warning that you already have a backup from BimmerCode / E-Sys / Autel. A wrong
+coding write can leave the HMI partly-coded, so keep E-Sys / Autel ready as the fallback.
 
 The **restore** is experimental and safe-by-construction: it only ever writes back the exact NCD it
 read, only to the coding identifiers it read, gates on a CAFD-versions-and-VIN match, requires a typed
@@ -119,7 +126,8 @@ PC zip with [CLIENT-GUIDE.md](CLIENT-GUIDE.md); the client unzips it and double-
 ## Command line
 
 ```sh
-python3 installer/bimmhacks_installer.py backup-coding --out coding-backups        # snapshot + NCD backup
+python3 installer/bimmhacks_installer.py backup-coding --out coding-backups        # our NCD backup
+python3 installer/bimmhacks_installer.py preflight-coding --out coding-backups     # the root tool's read-only coding backup
 python3 installer/bimmhacks_installer.py verify-coding --backup <backup.json>      # read-only: does the car match?
 python3 installer/bimmhacks_installer.py restore-coding --backup <backup.json> --dry-run   # show, write nothing
 python3 installer/bimmhacks_installer.py restore-coding --backup <backup.json> --confirm-restore  # EXPERIMENTAL write-back

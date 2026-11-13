@@ -32,9 +32,10 @@ This project bundles three upstream repositories, each copied unchanged except w
   writes to `data/enrollments/<VIN>/` are never committed or shipped.
 - The installer calls its `ssh_enable.py` as a subprocess; it needs the `cryptography` Python
   package, which the installer installs on demand (`pip install --user cryptography`).
-- `installer/coding_backup.py` reuses `mgu7.preflight.backup` over its own ENET connection, so one
-  "Back up coding" produces both our NCD files and the root tool's read-only coding record. The
-  vendored `tools/idrive7-8-ssh-root/tests/test_preflight.py` validates preflight directly in CI.
+- `installer/coding_backup.py` keeps our NCD backup / restore exactly as it was, and adds a **separate,
+  independent** `preflight` command (`preflight_backup()`, reusing `mgu7.preflight.backup`). The two are
+  not coupled: "Back up coding" writes only the NCD backup, "Read-only backup" writes only the preflight
+  record. The vendored `tools/idrive7-8-ssh-root/tests/test_preflight.py` validates preflight in CI.
 
 ## 3. `tools/mgu-store/` — the on-car App Store
 

@@ -41,15 +41,17 @@ with *Browse* (the IP address is filled in from the key's `connect.txt`).
 > ⚠️ **Flashing reprograms the head unit and wipes its coding and BMW Digital Key pairings.**
 > Back up the coding first, and plan to re-pair digital keys. This is a one-time step; do not repeat it.
 
-**Back up the coding first.** Click **Back up coding**. In one pass over ENET it saves, under
-`coding-backups/`:
+**Back up the coding first.** There are two independent backups under `coding-backups/` — take either or
+both:
 
-- a **read-only coding backup** — the unit's coding store and identification, read twice and verified,
-  written as `coding_MGU.txt` with a `RESTORE.txt` that tells you how to put the coding back after a
-  flash (re-code HU_MGU **by vehicle order / "code by FA"** in E-Sys or BimmerCode — the reliable way);
-- which **CAFD coding versions**, VIN, IP and faults are on the car; and
-- where the unit hands it over, the **coding data (NCD)** as E-Sys-compatible `.ncd` files, for the
-  experimental restore. (Some units do not expose the NCD; the backup still succeeds.)
+- **Back up coding** — saves which **CAFD coding versions**, VIN, IP and faults are on the car, and where
+  the unit hands it over, the **coding data (NCD)** as E-Sys-compatible `.ncd` files. This is the copy the
+  experimental **restore** card can write back. (Some units do not expose the NCD; the backup still
+  succeeds.)
+- **Read-only backup** — the root tool's read-only coding backup: it reads the unit's coding store and
+  identification twice, verifies them, and writes `coding_MGU.txt` with a `RESTORE.txt` that tells you how
+  to put the coding back after a flash (re-code HU_MGU **by vehicle order / "code by FA"** in E-Sys or
+  BimmerCode — the reliable way). It never writes to the car.
 
 Having BimmerCode / E-Sys / Autel as a fallback is strongly advised.
 

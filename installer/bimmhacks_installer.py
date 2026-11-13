@@ -31,7 +31,7 @@ it. Stage C (App Store) needs internet at the car (or a prepared USB stick).
 """
 import argparse, json, os, queue, re, shutil, stat, subprocess, sys, tempfile, threading, time
 
-VERSION = '1.10.0'
+VERSION = '1.10.1'
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 DEFAULT_IP = '169.254.36.47'                # the unit's address with the idrive7-8-ssh-root tool
@@ -442,6 +442,23 @@ def do_backup_coding(log, vin=None, ip=None, gateway='auto', arch='id7', out_dir
     saved = next((l.strip() for l in lines if l.strip().endswith('.txt')), None)
     log('Coding backup saved in: ' + out_dir)
     return saved or out_dir
+
+
+def do_preflight_backup(log, vin=None, ip=None, gateway='auto', arch='id7', out_dir=None):
+    """The root tool's READ-ONLY coding backup - a separate, independent option from "Back up coding".
+    Scans the coding store over ENET, reads it twice and verifies, and writes coding_MGU.txt + RESTORE.txt
+    (VO / code-by-FA re-coding). It never writes to the car. -> the folder it wrote into."""
+    out_dir = out_dir or CODING_BACKUP_DIR
+    log('Reading the head unit over ENET for the read-only coding backup ...')
+    args = ['preflight', '--out', out_dir]
+    if vin:
+        args += ['--vin', vin]
+    code, lines = _run_coding(args, log, gateway=gateway, ip=ip, arch=arch)
+    if code:
+        log('The read-only coding backup did not fully verify - keep a BimmerCode / E-Sys / Autel backup too.')
+    folder = next((l.split(': ', 1)[1].strip() for l in lines if l.startswith('Read-only coding backup written to')), None)
+    log('Read-only coding backup saved in: ' + (folder or out_dir))
+    return folder or out_dir
 
 
 def latest_coding_backup(out_dir=None, vin=None):
@@ -1133,6 +1150,14 @@ def run_gui():
             log('Backup done. Keep it safe; also keep your BimmerCode / E-Sys / Autel backup.')
         start(w, 'Coding backup saved - see the activity log.')
 
+    def on_preflight():
+        vin, _, _, arch = conn_values()
+        def w():
+            do_preflight_backup(log, vin=vin or None, arch=arch)
+            ui_set(backup_done, True)
+            log('Read-only coding backup done. It never writes to the car; restore with E-Sys (code by FA).')
+        start(w, 'Read-only coding backup saved - see the activity log.')
+
     def on_detect_vin():
         _, _, _, arch = conn_values()
         def w():
@@ -1192,8 +1217,10 @@ def run_gui():
 
     rr1 = row(c1, pady=(6, 4))
     button(rr1, 'Detect VIN', on_detect_vin)
-    button(rr1, 'Back up coding', on_backup)
     button(rr1, 'Check state', lambda: on_root('status'))
+    rrb = row(c1, pady=(0, 4))
+    button(rrb, 'Back up coding', on_backup)
+    button(rrb, 'Read-only backup', on_preflight)
     rr2 = row(c1, pady=(0, 14))
     button(rr2, 'Flash + enable SSH', lambda: on_root('flash',
            'Flash the debug image and enable root SSH?\n\nThis REPROGRAMS the head unit and WIPES its coding '
@@ -1464,7 +1491,7 @@ def main(argv=None):
                     choices=['gui',
                              'root-status', 'root-flash', 'root-enable', 'root-fix-key', 'root-disable',
                              'root-enter-prog', 'root-exit-prog',
-                             'detect-vin', 'backup-coding', 'verify-coding', 'restore-coding',
+                             'detect-vin', 'backup-coding', 'preflight-coding', 'verify-coding', 'restore-coding',
                              'test', 'store-install', 'restart-head-unit',
                              'install-ridetube', 'install-idrive-apps', 'install-car-apps', 'install-our-apps',
                              'usb-repo', 'pid-capture'])
@@ -1513,6 +1540,9 @@ def main(argv=None):
             return
         if a.action == 'backup-coding':
             do_backup_coding(log, vin=a.vin, ip=a.ip, gateway=a.gateway, arch=a.arch, out_dir=a.out, no_ncd=a.no_ncd)
+            return
+        if a.action == 'preflight-coding':
+            do_preflight_backup(log, vin=a.vin, ip=a.ip, gateway=a.gateway, arch=a.arch, out_dir=a.out)
             return
         if a.action == 'verify-coding':
             bk = a.backup or latest_coding_backup(a.out, a.vin)

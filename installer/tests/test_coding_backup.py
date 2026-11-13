@@ -103,15 +103,13 @@ class CodingSnapshot(unittest.TestCase):
         self.assertIn('DID capture the coding data', text)
 
     def test_preflight_read_only_coding_backup_is_taken(self):
-        # with preflight_out set, the backup also takes the root tool's read-only coding-store backup
-        # (coding 0x3000-0x3FFF + identification, read twice and verified) with its RESTORE.txt
+        # the read-only preflight backup is a SEPARATE, independent operation from the NCD backup: the
+        # root tool's coding-store scan (0x3000-0x3FFF + identification, read twice and verified) + RESTORE.txt
         with FakeCar(vin=VIN):
-            snap = coding_backup.collect(gateway='127.0.0.1', vin=VIN, log=quiet, preflight_out=self.out)
-        pf = snap.get('preflight')
-        self.assertIsNotNone(pf)
+            pf = coding_backup.preflight_backup(gateway='127.0.0.1', vin=VIN, out=self.out, log=quiet)
         self.assertTrue(pf['verified'], 'the coding read twice and matched')
-        self.assertEqual(pf['coding_blocks'], len(FakeCar.CODING_STORE))
-        folder = os.path.join(self.out, pf['folder'])
+        self.assertEqual(len(pf['coding']), len(FakeCar.CODING_STORE))
+        folder = pf['folder']
         for name in ('RESTORE.txt', 'coding_MGU.txt', 'backup.json', 'SHA256SUMS'):
             self.assertTrue(os.path.isfile(os.path.join(folder, name)), name + ' written')
         with open(os.path.join(folder, 'RESTORE.txt')) as f:

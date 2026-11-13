@@ -155,11 +155,9 @@ def _open_client(gateway, mgu_ip, vin, log):
     return client, gw, found_vin
 
 
-def collect(gateway='auto', mgu_ip=None, arch='id7', vin=None, log=print, read_ncd=True, preflight_out=None):
+def collect(gateway='auto', mgu_ip=None, arch='id7', vin=None, log=print, read_ncd=True):
     """Read the backup from the car. -> dict. Raises on a link that cannot be reached. The NCD read is
-    best-effort: if the unit does not hand it over, the snapshot is still complete. When preflight_out is
-    set, also take the root tool's read-only coding-store backup (0x3000-0x3FFF + identification, with its
-    RESTORE.txt) into that folder over the same connection."""
+    best-effort: if the unit does not hand it over, the snapshot is still complete."""
     from mgu7 import diag, hsfz
     client, gw, found_vin = _open_client(gateway, mgu_ip, vin, log)
     snap = {'tool': 'bimmhacks coding backup', 'schema': SCHEMA, 'taken': _now(),
@@ -210,24 +208,6 @@ def collect(gateway='auto', mgu_ip=None, arch='id7', vin=None, log=print, read_n
                 log('  This unit did not hand coding data over the default way - the snapshot is complete,')
                 log('  but there is no restorable NCD. Keep using E-Sys / Autel for the restore, or capture')
                 log('  your tool\'s coding session with pid_capture.py so we can set the protocol.')
-
-        if preflight_out:
-            # the root tool's own read-only coding backup (cauliflowermossgrape/idrive7-8-ssh-root,
-            # mgu7/preflight.py): the coding store 0x3000-0x3FFF + identification, read twice and
-            # compared, with a RESTORE.txt that points to VO / code-by-FA re-coding (issue #10).
-            try:
-                from mgu7 import preflight as _pf
-                log('Taking the read-only coding backup (coding store 0x3000-0x3FFF + identification) ...')
-                pf = _pf.backup(client, svk, preflight_out, vin=found_vin, log=log)
-                snap['preflight'] = {'folder': os.path.basename(pf.get('folder', '')),
-                                     'verified': bool(pf.get('verified')),
-                                     'coding_blocks': len(pf.get('coding') or {})}
-                log('  read-only coding backup: %s (%d coding block(s), %s)' % (
-                    snap['preflight']['folder'], snap['preflight']['coding_blocks'],
-                    'read twice and verified' if snap['preflight']['verified'] else 'NOT verified - do not rely on it alone'))
-            except Exception as e:
-                log('  (read-only coding backup skipped: %s)' % e)
-                snap['preflight'] = {'error': str(e)}
     finally:
         try:
             client.close()
@@ -296,6 +276,35 @@ def write(snap, out_dir, log=print):
 
 
 # ============================================================ verify + restore (experimental)
+def preflight_backup(gateway='auto', mgu_ip=None, vin=None, out=None, log=print):
+    """The root tool's READ-ONLY coding backup, standalone and independent of the NCD backup above.
+
+    Reuses cauliflowermossgrape/idrive7-8-ssh-root's mgu7/preflight.py over our own ENET connection:
+    it scans the coding store (DID 0x3000-0x3FFF) and identification, reads them twice and verifies,
+    and writes coding_MGU.txt + a RESTORE.txt (VO / code-by-FA re-coding). It never writes to the car.
+    -> the preflight result dict (its 'folder' and 'verified')."""
+    from mgu7 import diag, preflight
+    out = out or '.'
+    os.makedirs(out, exist_ok=True)
+    client, gw, found_vin = _open_client(gateway, mgu_ip, vin, log)
+    try:
+        log('Reading software versions (SVK) ...')
+        svk = diag.read_svk(client)
+        log('Taking the read-only coding backup (coding store 0x3000-0x3FFF + identification) ...')
+        result = preflight.backup(client, svk, out, vin=found_vin, log=log)
+        log('Read-only coding backup written to: ' + result.get('folder', out))
+        if not result.get('verified'):
+            log('WARNING: the coding read is incomplete or did not verify - do not rely on it as your only backup.')
+        else:
+            log('After a flash, re-code HU_MGU by vehicle order (E-Sys / BimmerCode); see RESTORE.txt in the folder.')
+        return result
+    finally:
+        try:
+            client.close()
+        except OSError:
+            pass
+
+
 def load_backup(path):
     with open(path, encoding='utf-8') as f:
         snap = json.load(f)
@@ -420,7 +429,7 @@ def verify(backup, gateway='auto', mgu_ip=None, log=print):
 # ============================================================ CLI
 def main(argv=None):
     ap = argparse.ArgumentParser(description='Bimmhacks MGU coding backup / restore (experimental).')
-    ap.add_argument('action', nargs='?', default='backup', choices=['backup', 'restore', 'verify'])
+    ap.add_argument('action', nargs='?', default='backup', choices=['backup', 'restore', 'verify', 'preflight'])
     ap.add_argument('--out', help='backup: folder to write the backup into')
     ap.add_argument('--backup', help='restore / verify: the backup .json to use')
     ap.add_argument('--gateway', default='auto')
@@ -428,8 +437,6 @@ def main(argv=None):
     ap.add_argument('--arch', default='id7')
     ap.add_argument('--vin', default=None)
     ap.add_argument('--no-ncd', action='store_true', help='backup: snapshot only, do not read the coding data')
-    ap.add_argument('--no-preflight', action='store_true',
-                    help='backup: skip the root tool\'s read-only coding-store backup (0x3000-0x3FFF + RESTORE.txt)')
     ap.add_argument('--dry-run', action='store_true', help='restore: show what would be written, write nothing')
     ap.add_argument('--confirm-restore', action='store_true',
                     help='restore: I accept this is experimental and can leave the HMI partly-coded, and I have '
@@ -442,10 +449,14 @@ def main(argv=None):
         if a.action == 'backup':
             if not a.out:
                 ap.error('--out is needed for a backup')
-            snap = collect(gateway=a.gateway, mgu_ip=a.mgu_ip, arch=a.arch, vin=a.vin, log=log,
-                           read_ncd=not a.no_ncd, preflight_out=None if a.no_preflight else a.out)
+            snap = collect(gateway=a.gateway, mgu_ip=a.mgu_ip, arch=a.arch, vin=a.vin, log=log, read_ncd=not a.no_ncd)
             write(snap, a.out, log=log)
             return 0
+        if a.action == 'preflight':
+            if not a.out:
+                ap.error('--out is needed for the read-only preflight backup')
+            r = preflight_backup(gateway=a.gateway, mgu_ip=a.mgu_ip, vin=a.vin, out=a.out, log=log)
+            return 0 if r.get('verified') else 1
         if not a.backup:
             ap.error('--backup <file.json> is needed')
         bk = load_backup(a.backup)
