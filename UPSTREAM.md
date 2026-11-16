@@ -67,16 +67,22 @@ This project bundles three upstream repositories, each copied unchanged except w
 ## 6. `tools/beem-flash/` — the BeeM-Flash wireless bridge helper
 
 - **Repository:** https://github.com/waliworld/BeeM-Flash
-- **Commit:** `3d09482326c3ba98eb1b8fbc9f75e28b9b5afc5a`
+- **Commit:** `7f8bc99` (v2.28.0 — the helper rebuilt around the app's own listener, with the full
+  `INSTALL.md`). Was `3d09482`.
 - **Licence:** MIT (TunedByWali) — `tools/beem-flash/LICENSE`, with `NOTICE.md`.
 - Only the bridge tooling is vendored, not the full BeeM-Flash app: `beem-bridge/` (the root daemon
-  `beem-bridged.js`, its systemd unit, `install.sh` / `uninstall.sh`), `beem-probe/` and
-  `bridge-probes/probe-car.sh` (read-only on-car probes), and `docs/BRIDGE.md`. The installer's
-  **Wireless Bridge** tab streams these to a rooted unit over SSH and runs them (`do_beem`).
-- The bridge is **OFF by default and consent-gated on the car** (acknowledge → enable → time-boxed
-  lease; the app is the policy authority). The installer only deploys the helper and runs its probes;
-  it never enables the bridge. Everything here is for the owner's own vehicle. `installer/tests/test_bridge.py`
-  proves the deploy copies the right files and that the probes run no destructive command.
+  `beem-bridged.js`, its systemd unit, `install.sh` / `uninstall.sh`, `INSTALL.md`, `README.md`),
+  `beem-probe/` and `bridge-probes/probe-car.sh` (read-only on-car probes), and `docs/BRIDGE.md`. The
+  installer's **Wireless Bridge** tab streams these to a rooted unit over SSH and runs them (`do_beem`):
+  `--probe` (capability), install (with `--app-uid` / `--open-iface` / `--channel` / `--take-iface` /
+  `--no-systemd`), `--status`, uninstall, and the car probe. install.sh options are validated before they
+  reach the remote shell (`_beem_install_args`).
+- The bridge is **OFF by default**: the helper never talks to the car (the app does, every request
+  approved on the car's screen), and it broadcasts nothing until the owner turns on WI-FI: OWN from the
+  app. The installer only deploys the helper and runs its probes. Everything here is for the owner's own
+  vehicle. The Wireless Bridge tab is also gated by an access code during testing (see below).
+  `installer/tests/test_bridge.py` proves the deploy copies the right files, validates the options, and
+  that the read-only actions run no destructive command.
 
 ## Bimmhacks additions (not upstream)
 

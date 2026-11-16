@@ -148,18 +148,30 @@ the car SSH key).
 > way until testing is done. (Owners: change the shared code with
 > `python3 installer/bimmhacks_installer.py bridge-set-code`, then rebuild the package.)
 
-> This is experimental and for a car you own. The installer only **deploys the helper and runs read-only
-> probes** — it never turns the bridge on. The bridge stays **off by default** and is enabled on the car
-> itself, through BeeM-Flash's own consent gates (acknowledge → enable → a short time-boxed lease).
+> This is experimental and for a car you own. The installer only **deploys the helper and runs probes** —
+> it never turns the bridge on. The helper never talks to the car (the app does, and every request is
+> approved on the car's screen), and the bridge stays **off by default**: you turn it on from the app.
 
-- **Check unit (AP probe)** — read-only. Reports whether this head unit's Wi-Fi can host an access point.
-  Changes nothing.
-- **Install bridge helper** — copies the helper to the unit and installs it as a root service (it starts
-  at boot). Afterwards, on the car: **BeeM-Flash → CONNECT → WIRELESS BRIDGE**.
-- **Remove bridge helper** — stops the service and removes it; the access point goes down.
-- **Developer probes → Car probe** — read-only. Maps the unit's network and tests whether a phone on the
-  hotspot can reach a listener on the head unit (it opens a short-lived listener for about a minute). It
-  sends nothing to the car. **Bridge design & status** opens the design notes.
+Steps:
+
+1. **Check unit (AP probe)** — read-only. Reports what this head unit can do (Wi-Fi AP mode, `hostapd`,
+   channel). Changes nothing. If something reads NO / MISSING, see the **Install guide** button (§8).
+2. Set **App uid** — on the car, **BeeM-Flash → SETUP → DIAG**, line **P8** shows `uid NNNNN`. Type it in
+   (the default **12261** is right for most cars).
+3. **Install bridge helper** — copies the helper to the unit and installs it as a root service that starts
+   at boot, then checks it answers. *Advanced* (only if a probe tells you to): **Take over Wi-Fi radio**
+   (the car's own Wi-Fi / CarPlay drop while the bridge network is on), **open car-Wi-Fi iface**, and a
+   fixed **channel**.
+4. On the car: **BeeM-Flash → CONNECT → WIRELESS BRIDGE → BRIDGE: ON**, then tap **WI-FI: CAR** so it reads
+   **WI-FI: OWN**. The screen shows a network name, password and the tool address (`192.168.44.1`, ports
+   `13400` / `6801`). Join it from the phone and point your tool there.
+5. **Status** — asks the running helper for its live state (network, devices, errors).
+6. **Remove bridge helper** — stops the service and removes it; the network goes down. The car's own Wi-Fi
+   is untouched.
+
+The **Install guide** button opens the full step-by-step (`tools/beem-flash/beem-bridge/INSTALL.md`), and
+**Bridge design & status** opens the design notes. **Developer probes → Car probe** is read-only: it maps
+the unit's network and tests whether a phone on the hotspot can reach a listener on the head unit.
 
 ## Phone instead of a laptop: Bimmhacks Pocket
 

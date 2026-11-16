@@ -1,35 +1,47 @@
 #!/usr/bin/env node
 'use strict';
 /*
- * beem-bridged — the root helper that gives BeeM-Flash a wireless bridge.
+ * beem-bridged — the root helper behind BeeM-Flash's "OWN WI-FI" bridge mode.
  *
- * WHY IT EXISTS
- *   The head unit's app sandbox cannot bring up Wi-Fi or listen on a port. So
- *   this small daemon owns the network side, and the app attaches to its UNIX
- *   socket as a client:
+ * WHAT IT IS FOR
+ *   The BeeM-Flash app already hosts the whole bridge itself: it listens on every
+ *   interface for ENET/HSFZ (TCP 6801), DoIP (TCP 13400) and answers discovery
+ *   (UDP 6811 / 13400), and it judges every request against the on-screen gate.
+ *   What an app sandbox can NOT do without root is the network plumbing. This
+ *   daemon does exactly that and nothing else:
  *
- *     phone / tool --Wi-Fi--> [this daemon: AP + DoIP] --UNIX socket--> app
- *                                                                        |
- *                                                                TASU to the car
+ *     1. brings up a separate Wi-Fi network ("BeeM-Flash") on a VIRTUAL access-
+ *        point interface, so the car's own Wi-Fi / wireless CarPlay keep running;
+ *     2. hands phones an address on it (DHCP, no default route, no DNS, so the
+ *        phone keeps mobile data for the internet);
+ *     3. opens the head unit's firewall for the bridge ports on that network
+ *        only (and, if asked, on the car's own Wi-Fi interface);
+ *     4. checks, as root, that the app's listener really answers on that
+ *        network - so you know it works before you pick up a phone.
  *
- * WHAT IT DOES *NOT* DO — read this before trusting it:
- *   * It does not decide what may reach the car. It carries bytes. Every
- *     relayed request is judged by the APP (relaypolicy + the on-screen consent
- *     gate). If the app is not attached and armed, nothing is relayed at all.
- *   * It writes NO persistent system configuration. hostapd/dnsmasq configs are
- *     written under a runtime directory and removed on exit. Stopping the
- *     daemon leaves the unit as it was.
- *   * It never touches the vehicle bus itself.
+ *     phone/tool --Wi-Fi (this AP)--> app listener 6801/13400 --TASU--> car
+ *                                   ^ the app is the only thing that talks to the car
  *
- * STATUS: the control protocol, the DoIP server and the relay are exercised by
- * the project's tests. Bringing up a SoftAP is HEAD-UNIT SPECIFIC and is NOT
- * verified on an MGU: run `beem-bridged --probe` first, which reports whether
- * this unit's Wi-Fi can do AP mode at all and whether the tools are present.
+ *   It never carries diagnostic traffic and never talks to the vehicle. It holds
+ *   no policy: what may reach the car is decided by the app, on screen.
+ *
+ * LIFECYCLE
+ *   Runs from boot (systemd), idle and harmless: no Wi-Fi is broadcast until the
+ *   app asks for it (OWN WI-FI on the bridge page). The network comes down when
+ *   the app turns it off, when the app has been gone for a minute, or after
+ *   --idle seconds with nobody joined. The daemon itself keeps running.
+ *
+ * NOTHING PERSISTENT
+ *   Configs, leases and the socket live under the runtime dir and are removed on
+ *   exit; firewall rules it added are removed on exit; the virtual interface is
+ *   deleted. Stopping the daemon leaves the unit as it was.
  *
  * Usage:
- *   beem-bridged --probe                 report capability, change nothing
- *   beem-bridged [--iface wlan0] [--ssid BeeM-Flash] [--channel 6]
- *                [--country US] [--addr 192.168.44.1] [--no-ap] [--idle 1800]
+ *   beem-bridged --probe            report what this unit can do; changes nothing
+ *   beem-bridged [--iface wlan0] [--ssid BeeM-Flash] [--channel N] [--country US]
+ *                [--addr 192.168.44.1] [--idle 1800] [--open-iface wlan_bridge]
+ *                [--take-iface] [--uid 12261] [--gid 12202]
+ *   beem-bridged --status           ask the running daemon for its state
  */
 
 var net = require('net');
@@ -37,6 +49,7 @@ var fs = require('fs');
 var os = require('os');
 var path = require('path');
 var cp = require('child_process');
+var crypto = require('crypto');
 
 // ---- options ---------------------------------------------------------------
 var argv = process.argv.slice(2);
@@ -48,179 +61,325 @@ function opt(name, dflt) {
 }
 var OPT = {
   probe: argv.indexOf('--probe') >= 0,
-  noAp: argv.indexOf('--no-ap') >= 0,
+  status: argv.indexOf('--status') >= 0,
+  takeIface: argv.indexOf('--take-iface') >= 0,     // allow using the phys iface if no virtual AP
   iface: String(opt('iface', '') || ''),
+  vif: String(opt('vif', 'beem0')),
   ssid: String(opt('ssid', 'BeeM-Flash')),
-  channel: Number(opt('channel', 6)) || 6,
-  country: String(opt('country', 'US')),
+  channel: Number(opt('channel', 0)) || 0,          // 0 = follow the radio's current channel
+  country: String(opt('country', 'US')).toUpperCase().slice(0, 2),
   addr: String(opt('addr', '192.168.44.1')),
-  sock: String(opt('socket', '/run/beem-bridge/bridge.sock')),
-  doipPort: Number(opt('port', 13400)) || 13400,
   idleSec: Number(opt('idle', 1800)) || 1800,
-  appGid: Number(opt('gid', 12202)) || 12202,   // tm_oap_app: the app's group
-  runDir: String(opt('rundir', '/run/beem-bridge'))
+  openIfaces: String(opt('open-iface', '') || '').split(',').filter(Boolean),
+  appUid: opt('uid', null) === null ? null : Number(opt('uid', null)),
+  appGid: Number(opt('gid', 12202)) || 12202,       // tm_oap_app: the app's group
+  runDir: String(opt('rundir', '/run/beem-bridge')),
+  socks: [String(opt('socket', '/run/beem-bridge/bridge.sock')), String(opt('socket2', '/dev/shm/beem-bridge/bridge.sock'))]
+    .filter(function (s) { return s && s !== 'none'; })
 };
+// Values that reach shell commands are validated, never passed through raw.
+if (!/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.1$/.test(OPT.addr)) OPT.addr = '192.168.44.1';
+OPT.vif = cleanIface(OPT.vif) || 'beem0';
+// The ports the app's own listener serves (bridgeserver.js / discovery.js).
+var TCP_PORTS = [6801, 13400];
+var UDP_PORTS = [6811, 13400];
 
-function log() {
-  var a = Array.prototype.slice.call(arguments);
-  process.stdout.write('[beem-bridged] ' + a.join(' ') + '\n');
-}
+function log() { process.stdout.write('[beem-bridged] ' + Array.prototype.slice.call(arguments).join(' ') + '\n'); }
 function sh(cmd) {
-  try { return { ok: true, out: String(cp.execSync(cmd, { stdio: ['ignore', 'pipe', 'pipe'] })) }; }
+  try { return { ok: true, out: String(cp.execSync(cmd, { stdio: ['ignore', 'pipe', 'pipe'], timeout: 8000 })) }; }
   catch (e) { return { ok: false, out: String((e && (e.stderr || e.stdout)) || (e && e.message) || e) }; }
 }
 function has(bin) { return sh('command -v ' + bin + ' 2>/dev/null').ok; }
 
-// ---- capability probe ------------------------------------------------------
-function wifiIfaces() {
-  var out = [];
-  var ifs = os.networkInterfaces();
-  for (var name in ifs) if (ifs.hasOwnProperty(name)) {
-    if (name === 'lo') continue;
-    var v4 = (ifs[name] || []).filter(function (a) { return a.family === 'IPv4'; })[0];
+// Anything that reaches a config file or a shell must be plain printable ASCII:
+// a newline in an SSID could otherwise inject hostapd directives (e.g. wpa=0).
+function cleanText(s, min, max) {
+  s = String(s == null ? '' : s);
+  if (s.length < min || s.length > max) return null;
+  if (!/^[\x20-\x7e]+$/.test(s)) return null;
+  return s;
+}
+function cleanIface(s) { return /^[A-Za-z0-9_.-]{1,15}$/.test(String(s)) ? String(s) : null; }
+
+// ---- radio / interfaces ----------------------------------------------------
+function ifaceList() {
+  var out = [], ifs = os.networkInterfaces();
+  Object.keys(ifs).forEach(function (name) {
+    if (name === 'lo') return;
+    var v4 = (ifs[name] || []).filter(function (a) { return a.family === 'IPv4' || a.family === 4; })[0];
     out.push({ name: name, address: v4 ? v4.address : null, mac: v4 ? v4.mac : null });
-  }
+  });
   return out;
 }
-function apCapable() {
-  var r = sh('iw list 2>/dev/null');
-  if (!r.ok) return { known: false, ap: false, why: 'iw not available' };
-  var m = /Supported interface modes:([\s\S]*?)\n\s*\n/.exec(r.out);
-  var block = m ? m[1] : r.out;
-  return { known: true, ap: /\bAP\b/.test(block), why: null };
-}
-function probe() {
-  var ifs = wifiIfaces(), cap = apCapable();
-  log('interfaces:');
-  ifs.forEach(function (i) { log('   ' + i.name + '  ' + (i.address || '-') + '  ' + (i.mac || '')); });
-  log('AP mode supported: ' + (cap.known ? (cap.ap ? 'YES' : 'NO') : 'unknown (' + cap.why + ')'));
-  ['hostapd', 'dnsmasq', 'udhcpd', 'iw', 'ip'].forEach(function (b) {
-    log('tool ' + b + ': ' + (has(b) ? 'present' : 'MISSING'));
+// `iw dev` -> [{ phy, iface, type, channel }]
+function iwDevs() {
+  var r = sh('iw dev 2>/dev/null');
+  if (!r.ok) return [];
+  var out = [], phy = null, cur = null;
+  r.out.split('\n').forEach(function (ln) {
+    var m;
+    if ((m = /^phy#(\d+)/.exec(ln))) { phy = 'phy' + m[1]; return; }
+    if ((m = /^\s+Interface\s+(\S+)/.exec(ln))) { cur = { phy: phy, iface: m[1], type: null, channel: null }; out.push(cur); return; }
+    if (!cur) return;
+    if ((m = /^\s+type\s+(\S+)/.exec(ln))) cur.type = m[1];
+    if ((m = /^\s+channel\s+(\d+)/.exec(ln))) cur.channel = Number(m[1]);
   });
-  log('runtime dir: ' + OPT.runDir);
-  log('socket path: ' + OPT.sock);
-  log('');
-  log('If AP mode is NO or hostapd is MISSING, this unit cannot host its own');
-  log('Wi-Fi network. The relay can still be used over an existing network by');
-  log('running with --no-ap and reaching ' + OPT.doipPort + ' on an address the unit already has.');
+  return out;
+}
+// Can this radio run an extra AP next to what it already does? `iw list`
+// "valid interface combinations" is the authority; "Supported interface modes"
+// only says AP exists at all.
+function apCapability() {
+  var r = sh('iw list 2>/dev/null');
+  if (!r.ok) return { known: false, ap: false, combos: null, why: 'iw not available' };
+  var modes = /Supported interface modes:([\s\S]*?)\n\s*\n/.exec(r.out);
+  var ap = modes ? /\*\s+AP\s*$/m.test(modes[1]) : false;
+  var combos = /valid interface combinations:([\s\S]*?)(\n\s*\n|$)/i.exec(r.out);
+  return { known: true, ap: ap, combos: combos ? combos[1].replace(/\s+/g, ' ').trim() : null, why: null };
+}
+function pickPhysIface() {
+  if (OPT.iface) return cleanIface(OPT.iface);
+  var devs = iwDevs().filter(function (d) { return d.iface !== OPT.vif; });
+  var managed = devs.filter(function (d) { return d.type === 'managed'; })[0];
+  if (managed) return managed.iface;
+  if (devs[0]) return devs[0].iface;
+  var wl = ifaceList().map(function (i) { return i.name; }).filter(function (n) { return /^wl|wlan/.test(n) && n !== OPT.vif; });
+  return wl[0] || null;
+}
+// Follow the channel the radio is already on: a second AP on the SAME channel is
+// the combination radios support best, and it keeps the car's own Wi-Fi intact.
+function currentChannel(phys) {
+  var devs = iwDevs(), me = devs.filter(function (d) { return d.iface === phys; })[0];
+  var phy = me && me.phy;
+  var on = devs.filter(function (d) { return d.channel && (!phy || d.phy === phy); })[0];
+  return on ? on.channel : null;
 }
 
-// ---- AP state --------------------------------------------------------------
-// A readable passphrase: the car SHOWS it and you type it into the phone, so it
-// avoids characters that are ambiguous on a dashboard (0/O, 1/l/I).
+// ---- passphrase --------------------------------------------------------------
+// Readable (the car SHOWS it and you type it into the phone) but random from a
+// cryptographic source: 3 words + 4 digits (~2^34), not Math.random.
 var WORDS = ('amber anvil basalt cedar delta ember fjord granite harbor indigo jasper kettle lumen maple nickel onyx ' +
-  'pebble quartz raven summit timber umber violet walnut yarrow zenith cobalt dune elm forge glacier').split(' ');
+  'pebble quartz raven summit timber umber violet walnut yarrow zenith cobalt dune elm forge glacier ' +
+  'heron iris juniper kestrel lagoon meadow nectar orchid prairie quill reef sierra tundra vista willow').split(' ');
 function genPass() {
-  function pick(a) { return a[Math.floor(Math.random() * a.length)]; }
-  var n = String(Math.floor(Math.random() * 9000) + 1000);
-  return pick(WORDS) + '-' + n + '-' + pick(WORDS);
+  var b = crypto.randomBytes(8);
+  function pick(i) { return WORDS[((b[i] << 8) | b[i + 1]) % WORDS.length]; }
+  var n = String(1000 + (((b[6] << 8) | b[7]) % 9000));
+  return pick(0) + '-' + n + '-' + pick(2) + '-' + pick(4);
 }
 
+// ---- firewall ----------------------------------------------------------------
+var FW = { rules: [], note: null };
+function fwTool() { return has('iptables') ? 'iptables' : null; }
+function fwOpen(iface) {
+  var ipt = fwTool();
+  if (!ipt) { FW.note = has('nft') ? 'nftables in use - not modified' : 'no iptables (nothing to open)'; return; }
+  var specs = [];
+  TCP_PORTS.forEach(function (p) { specs.push('-i ' + iface + ' -p tcp --dport ' + p + ' -j ACCEPT'); });
+  UDP_PORTS.forEach(function (p) { specs.push('-i ' + iface + ' -p udp --dport ' + p + ' -j ACCEPT'); });
+  specs.push('-i ' + iface + ' -p udp --dport 67 -j ACCEPT');          // DHCP for the phone
+  specs.forEach(function (rule) {
+    if (sh(ipt + ' -C INPUT ' + rule + ' 2>/dev/null').ok) return;   // already present (ours or the unit's)
+    if (sh(ipt + ' -I INPUT ' + rule).ok) FW.rules.push(rule);
+    else FW.note = 'could not add a firewall rule (' + rule + ')';
+  });
+}
+function fwCloseIface(iface) {
+  var ipt = fwTool(); if (!ipt) return;
+  FW.rules = FW.rules.filter(function (rule) {
+    if (rule.indexOf('-i ' + iface + ' ') !== 0) return true;
+    sh(ipt + ' -D INPUT ' + rule);
+    return false;
+  });
+}
+
+// ---- access point ------------------------------------------------------------
 var AP = {
-  up: false,
-  ssid: OPT.ssid,
+  state: 'down',          // down | starting | up | failed
+  error: null,
+  ssid: cleanText(OPT.ssid, 1, 32) || 'BeeM-Flash',
   pass: genPass(),
   security: 'WPA2',
-  channel: OPT.channel,
+  channel: null,
   address: OPT.addr,
-  iface: OPT.iface || null,
-  procs: []
+  phys: null,
+  iface: null,            // the interface the AP actually runs on
+  virtual: false,
+  hostapd: null,
+  dnsmasq: null,
+  since: 0,
+  reach: null             // { 6801: true|errno, 13400: ... } from the root self-check
 };
 
-function pickIface() {
-  if (OPT.iface) return OPT.iface;
-  var cands = wifiIfaces().map(function (i) { return i.name; })
-    .filter(function (n) { return /^wl|wlan/.test(n); });
-  return cands[0] || null;
+function apLeaseFile() { return path.join(OPT.runDir, 'dnsmasq.leases'); }
+
+function killAndWait(proc, cb) {
+  if (!proc || proc.exitCode !== null || proc.signalCode) return cb();
+  var done = false;
+  function fin() { if (!done) { done = true; cb(); } }
+  proc.once('exit', fin);
+  try { proc.kill('SIGTERM'); } catch (e) { return fin(); }
+  setTimeout(function () { try { proc.kill('SIGKILL'); } catch (e) {} fin(); }, 3000);
 }
 
-function apStart() {
-  if (OPT.noAp) return { ok: false, why: 'started with --no-ap' };
-  if (AP.up) return { ok: true };
-  var iface = AP.iface || pickIface();
-  if (!iface) return { ok: false, why: 'no wireless interface found' };
-  if (!has('hostapd')) return { ok: false, why: 'hostapd is not installed on this unit' };
-  AP.iface = iface;
+function apStart(cb) {
+  if (AP.state === 'up' || AP.state === 'starting') return cb(null);
+  function fail(why) { AP.state = 'failed'; AP.error = why; log('access point not started: ' + why); apCleanup(function () { AP.state = 'failed'; cb(why); }); }
+  if (!has('hostapd')) return fail('hostapd is not installed on this unit');
+  if (!has('ip')) return fail('the ip tool is not installed on this unit');
+  var phys = pickPhysIface();
+  if (!phys) return fail('no wireless interface found');
+  AP.state = 'starting'; AP.error = null; AP.phys = phys;
 
-  try { fs.mkdirSync(OPT.runDir, 0x1c0); } catch (e) { /* exists */ }
+  // 1) a VIRTUAL AP interface next to the car's own Wi-Fi
+  var iface = null;
+  if (has('iw')) {
+    sh('iw dev ' + OPT.vif + ' del 2>/dev/null');
+    if (sh('iw dev ' + phys + ' interface add ' + OPT.vif + ' type __ap').ok) { iface = OPT.vif; AP.virtual = true; }
+  }
+  if (!iface) {
+    if (!OPT.takeIface) return fail('this radio cannot add a separate access point next to the car\'s own Wi-Fi ' +
+      '(see --probe). Not taking over ' + phys + ' because that would drop the car\'s Wi-Fi / wireless CarPlay; ' +
+      'start the daemon with --take-iface to allow it anyway.');
+    iface = phys; AP.virtual = false;
+  }
+  AP.iface = iface;
+  AP.channel = OPT.channel || currentChannel(phys) || 6;
+
+  // 2) address
+  sh('ip addr flush dev ' + iface + ' 2>/dev/null');
+  sh('ip addr add ' + AP.address + '/24 dev ' + iface);
+  sh('ip link set ' + iface + ' up');
+
+  // 3) hostapd (config under the runtime dir, sanitised values only)
+  try { fs.mkdirSync(OPT.runDir, 0x1ed); } catch (e) { /* exists */ }
   var conf = path.join(OPT.runDir, 'hostapd.conf');
   var body = [
-    'interface=' + iface,
-    'driver=nl80211',
-    'ssid=' + AP.ssid,
-    'hw_mode=g',
-    'channel=' + AP.channel,
-    'country_code=' + OPT.country,
-    'auth_algs=1',
-    'wpa=2',
-    'wpa_key_mgmt=WPA-PSK',
-    'rsn_pairwise=CCMP',
-    'wpa_passphrase=' + AP.pass,
+    'interface=' + iface, 'driver=nl80211', 'ssid=' + AP.ssid,
+    'hw_mode=' + (AP.channel > 14 ? 'a' : 'g'), 'channel=' + AP.channel,
+    'country_code=' + (/^[A-Z]{2}$/.test(OPT.country) ? OPT.country : 'US'), 'ieee80211d=1',
+    'ieee80211n=1', 'wmm_enabled=1', 'auth_algs=1',
+    'wpa=2', 'wpa_key_mgmt=WPA-PSK', 'rsn_pairwise=CCMP', 'wpa_passphrase=' + AP.pass,
     'ignore_broadcast_ssid=0'
   ].join('\n') + '\n';
-  try { fs.writeFileSync(conf, body, { mode: 0x180 }); } catch (e) { return { ok: false, why: 'cannot write ' + conf }; }
+  try { fs.writeFileSync(conf, body, { mode: 0x180 }); } catch (e) { return fail('cannot write ' + conf); }
 
-  var r = sh('ip addr add ' + AP.address + '/24 dev ' + iface + ' 2>/dev/null; ip link set ' + iface + ' up');
   var hp = cp.spawn('hostapd', [conf], { stdio: ['ignore', 'pipe', 'pipe'] });
-  hp.on('error', function (e) { log('hostapd failed: ' + e.message); AP.up = false; });
-  hp.stderr.on('data', function (d) { log('hostapd: ' + String(d).trim().slice(0, 200)); });
-  AP.procs.push(hp);
-
-  // a DHCP server so the phone gets an address; optional (a static IP also works)
-  if (has('dnsmasq')) {
-    var base = AP.address.replace(/\.\d+$/, '');
-    var dm = cp.spawn('dnsmasq', ['-d', '-i', iface, '-F', base + '.50,' + base + '.90,255.255.255.0',
-      '--dhcp-option=3,' + AP.address, '--dhcp-option=6,' + AP.address], { stdio: ['ignore', 'ignore', 'pipe'] });
-    dm.on('error', function () {});
-    AP.procs.push(dm);
-  } else {
-    log('dnsmasq not present: set a static address on the phone (' + AP.address.replace(/\.\d+$/, '.50') + '/24)');
+  AP.hostapd = hp;
+  var settled = false, lastLines = [];
+  function settle(err) { if (settled) return; settled = true; clearTimeout(t); if (err) fail(err); else afterUp(); }
+  function onLine(d) {
+    String(d).split('\n').forEach(function (ln) {
+      ln = ln.trim(); if (!ln) return;
+      lastLines.push(ln); if (lastLines.length > 6) lastLines.shift();
+      if (/AP-ENABLED/.test(ln)) settle(null);
+    });
   }
-  AP.up = true;
-  log('AP up: ssid="' + AP.ssid + '" on ' + iface + ' at ' + AP.address);
-  return { ok: true };
+  hp.stdout.on('data', onLine);          // always drained: an unread pipe would block hostapd
+  hp.stderr.on('data', onLine);
+  hp.on('error', function (e) { settle('hostapd could not start: ' + e.message); });
+  hp.on('exit', function (code) {
+    if (!settled) return settle('hostapd exited (' + code + '): ' + lastLines.slice(-2).join(' | '));
+    if (AP.hostapd === hp && AP.state === 'up') {           // died later: say so, do not pretend
+      log('hostapd stopped (' + code + ')');
+      AP.state = 'failed'; AP.error = 'hostapd stopped: ' + lastLines.slice(-1).join('');
+      apCleanup(function () { AP.state = 'failed'; });
+    }
+  });
+  var t = setTimeout(function () { settle('hostapd did not report AP-ENABLED within 10 s: ' + lastLines.slice(-2).join(' | ')); }, 10000);
+
+  function afterUp() {
+    // 4) DHCP for the phone: no router, no DNS (the phone keeps mobile data for
+    //    the internet and uses this Wi-Fi only for the car), own lease file,
+    //    never the unit's own resolver or /etc config.
+    if (has('dnsmasq')) {
+      var base = AP.address.replace(/\.\d+$/, '');
+      var dm = cp.spawn('dnsmasq', ['--keep-in-foreground', '--port=0', '--bind-interfaces', '--conf-file=/dev/null',
+        '--interface=' + iface, '--except-interface=lo', '--dhcp-range=' + base + '.50,' + base + '.90,255.255.255.0,1h',
+        '--dhcp-option=3', '--dhcp-option=6', '--dhcp-leasefile=' + apLeaseFile(),
+        '--pid-file=' + path.join(OPT.runDir, 'dnsmasq.pid')],
+        { stdio: ['ignore', 'ignore', 'pipe'] });
+      dm.stderr.on('data', function () {});
+      dm.on('error', function (e) { log('dnsmasq failed: ' + e.message + ' - give the phone a static ' + base + '.50/24'); });
+      AP.dnsmasq = dm;
+    } else {
+      log('dnsmasq not present: give the phone a static address ' + AP.address.replace(/\.\d+$/, '.50') + '/24');
+    }
+    // 5) firewall for the bridge ports on this network only
+    fwOpen(iface);
+    AP.state = 'up'; AP.since = Date.now();
+    log('AP up: "' + AP.ssid + '" on ' + iface + (AP.virtual ? ' (virtual, next to ' + phys + ')' : ' (took over ' + phys + ')') +
+      ' ch ' + AP.channel + ' at ' + AP.address);
+    // 6) prove the app's listener answers on this network
+    reachCheck(function () { cb(null); });
+  }
 }
 
-function apStop() {
-  AP.procs.forEach(function (p) { try { p.kill(); } catch (e) {} });
-  AP.procs = [];
-  if (AP.iface) sh('ip addr del ' + AP.address + '/24 dev ' + AP.iface + ' 2>/dev/null');
-  AP.up = false;
+function apCleanup(cb) {
+  var hp = AP.hostapd, dm = AP.dnsmasq, iface = AP.iface;
+  AP.hostapd = null; AP.dnsmasq = null;
+  killAndWait(dm, function () {
+    killAndWait(hp, function () {
+      if (iface) {
+        fwCloseIface(iface);
+        if (AP.virtual) sh('iw dev ' + iface + ' del 2>/dev/null');
+        else sh('ip addr del ' + AP.address + '/24 dev ' + iface + ' 2>/dev/null');
+      }
+      try { fs.unlinkSync(path.join(OPT.runDir, 'hostapd.conf')); } catch (e) {}
+      AP.iface = null; AP.reach = null;
+      cb();
+    });
+  });
+}
+
+function apStop(cb) {
+  if (AP.state === 'down') return cb && cb();
   log('AP down');
+  apCleanup(function () { AP.state = 'down'; AP.error = null; if (cb) cb(); });
+}
+
+// Root-side check that the APP's listener answers on the AP address. If it does,
+// a phone on this network reaches the bridge; if not, the reason is shown.
+function reachCheck(cb) {
+  var res = {}, left = TCP_PORTS.length;
+  TCP_PORTS.forEach(function (p) {
+    var c, done = false;
+    function fin(v) { if (done) return; done = true; res[p] = v; try { c && c.destroy(); } catch (e) {} if (--left === 0) { AP.reach = res; cb(res); } }
+    try { c = net.connect(p, AP.address); } catch (e) { return fin((e && e.code) || 'error'); }
+    c.setTimeout(1500, function () { fin('timeout'); });
+    c.on('connect', function () { fin(true); });
+    c.on('error', function (e) { fin((e && e.code) || 'error'); });
+  });
 }
 
 function stations() {
-  if (!AP.iface) return [];
+  if (!AP.iface || AP.state !== 'up') return [];
   var r = sh('iw dev ' + AP.iface + ' station dump 2>/dev/null');
   if (!r.ok) return [];
   var out = [], re = /Station ([0-9a-f:]{17})/gi, m;
   while ((m = re.exec(r.out))) out.push({ mac: m[1], ip: null });
-  // match leases to MACs where dnsmasq wrote them
   try {
-    var leases = fs.readFileSync('/var/lib/misc/dnsmasq.leases', 'utf8').split('\n');
-    leases.forEach(function (ln) {
+    fs.readFileSync(apLeaseFile(), 'utf8').split('\n').forEach(function (ln) {
       var f = ln.split(/\s+/);
       if (f.length >= 3) out.forEach(function (s) { if (s.mac.toLowerCase() === String(f[1]).toLowerCase()) s.ip = f[2]; });
     });
-  } catch (e) { /* no leases file */ }
+  } catch (e) { /* no leases yet */ }
   return out;
 }
 
 // ---- the app connection (UNIX socket) --------------------------------------
-var appSock = null;
-var pending = {};          // relay id -> callback(respBytes)
-var relaySeq = 1;
-var lastActivity = Date.now();
+var appSock = null, appGoneAt = 0, lastJoined = Date.now();
 
 function appSend(obj) {
   if (!appSock) return false;
   try { appSock.write(JSON.stringify(obj) + '\n'); return true; } catch (e) { return false; }
 }
-
 function stateMsg(id) {
   return {
     t: 'state', id: id, ok: true,
-    ap: { up: AP.up, ssid: AP.ssid, pass: AP.pass, security: AP.security, channel: AP.channel, address: AP.address },
+    ap: { up: AP.state === 'up', state: AP.state, error: AP.error, ssid: AP.ssid, pass: AP.pass, security: AP.security,
+      channel: AP.channel, address: AP.address, iface: AP.iface, virtual: AP.virtual, reach: AP.reach },
+    firewall: { opened: FW.rules.length, note: FW.note },
     stations: stations()
   };
 }
@@ -229,208 +388,164 @@ function onAppLine(line) {
   var msg;
   try { msg = JSON.parse(line); } catch (e) { return; }
   if (!msg || typeof msg !== 'object') return;
-  lastActivity = Date.now();
-
-  // a relayed answer coming back from the app
-  if (msg.t === 'uds-reply' && msg.id != null && pending[msg.id]) {
-    var cb = pending[msg.id]; delete pending[msg.id];
-    cb(msg.data || []);
-    return;
-  }
-  // control commands
   var id = msg.id;
+  function reply() { appSend(stateMsg(id)); }
+  function refuse(err) { appSend({ id: id, ok: false, error: err }); }
   switch (msg.cmd) {
     case 'status':
     case 'stations':
-      appSend(stateMsg(id));
-      break;
-    case 'ap': {
-      var r = msg.up ? apStart() : (apStop(), { ok: true });
-      if (!r.ok) appSend({ id: id, ok: false, error: r.why || 'could not start the access point' });
-      else appSend(stateMsg(id));
-      break;
+      return reply();
+    case 'ap':
+      if (msg.up) return apStart(function (err) { if (err) refuse(err); else reply(); });
+      return apStop(reply);
+    case 'check':
+      if (AP.state !== 'up') return reply();
+      return reachCheck(reply);
+    case 'set-ssid': {
+      var s = cleanText(msg.ssid, 1, 32);
+      if (!s) return refuse('SSID must be 1-32 plain characters');
+      AP.ssid = s;
+      return restartIfUp(reply, refuse);
     }
-    case 'set-ssid':
-      AP.ssid = String(msg.ssid || '').slice(0, 32) || AP.ssid;
-      if (AP.up) { apStop(); apStart(); }
-      appSend(stateMsg(id));
-      break;
     case 'set-pass': {
-      var p = String(msg.pass || '');
-      if (p.length < 8 || p.length > 63) { appSend({ id: id, ok: false, error: 'password must be 8-63 characters' }); break; }
+      var p = cleanText(msg.pass, 8, 63);
+      if (!p) return refuse('password must be 8-63 plain characters');
       AP.pass = p;
-      if (AP.up) { apStop(); apStart(); }
-      appSend(stateMsg(id));
-      break;
+      return restartIfUp(reply, refuse);
     }
     case 'new-pass':
       AP.pass = genPass();
-      if (AP.up) { apStop(); apStart(); }
-      appSend(stateMsg(id));
-      break;
+      return restartIfUp(reply, refuse);
     default:
-      if (id != null) appSend({ id: id, ok: false, error: 'unknown command' });
+      if (id != null) refuse('unknown command');
   }
 }
+function restartIfUp(ok, bad) {
+  if (AP.state !== 'up') return ok();
+  apStop(function () { apStart(function (err) { if (err) bad(err); else ok(); }); });
+}
 
-function startAppServer() {
-  try { fs.mkdirSync(OPT.runDir, 0x1c0); } catch (e) {}
-  try { fs.unlinkSync(OPT.sock); } catch (e) {}
+function prepareSocketPath(p, cb) {
+  var dir = path.dirname(p);
+  try { fs.mkdirSync(dir, 0x1ed); } catch (e) { /* exists */ }
+  try { fs.chmodSync(dir, 0x1ed); } catch (e) {}
+  if (!fs.existsSync(p)) return cb(true);
+  // A live daemon answers; a stale socket file from a crash does not.
+  var c = net.connect(p), done = false;
+  function fin(stale) { if (done) return; done = true; try { c.destroy(); } catch (e) {} if (stale) { try { fs.unlinkSync(p); } catch (e) {} } cb(stale); }
+  c.on('connect', function () { fin(false); });
+  c.on('error', function () { fin(true); });
+  setTimeout(function () { fin(true); }, 800);
+}
+
+function serveApp(p) {
   var srv = net.createServer(function (c) {
-    if (appSock) { try { c.end(); } catch (e) {} return; }   // one app at a time
-    appSock = c;
-    log('app attached');
+    // A newer app connection replaces an older one (the app restarted).
+    if (appSock && appSock !== c) { try { appSock.destroy(); } catch (e) {} }
+    appSock = c; appGoneAt = 0;
+    log('app attached (' + p + ')');
     var buf = '';
     c.on('data', function (d) {
       buf += String(d);
-      if (buf.length > 1024 * 1024) { buf = ''; try { c.destroy(); } catch (e) {} return; }
+      if (buf.length > 256 * 1024) { buf = ''; try { c.destroy(); } catch (e) {} return; }
       var i;
       while ((i = buf.indexOf('\n')) >= 0) { var ln = buf.slice(0, i); buf = buf.slice(i + 1); if (ln) onAppLine(ln); }
     });
-    function gone() {
-      if (appSock === c) { appSock = null; log('app detached — relay closed'); }
-      // anything waiting on the app gets nothing; the tool sees a timeout
-      for (var k in pending) if (pending.hasOwnProperty(k)) { try { pending[k]([]); } catch (e) {} }
-      pending = {};
-    }
+    function gone() { if (appSock === c) { appSock = null; appGoneAt = Date.now(); log('app detached'); } }
     c.on('close', gone);
     c.on('error', gone);
   });
-  srv.listen(OPT.sock, function () {
-    // the app runs as another user: let its group reach the socket
-    try { fs.chmodSync(OPT.sock, 0x1b0); } catch (e) {}
-    try { fs.chownSync(OPT.sock, 0, OPT.appGid); } catch (e) {}
-    log('listening on ' + OPT.sock + ' (group ' + OPT.appGid + ')');
+  srv.on('error', function (e) { log('socket ' + p + ': ' + e.message); });
+  srv.listen(p, function () {
+    try { fs.chmodSync(p, 0x1b0); } catch (e) { log('chmod ' + p + ': ' + e.message); }
+    var uid = (OPT.appUid !== null && isFinite(OPT.appUid)) ? OPT.appUid : 0;
+    try { fs.chownSync(p, uid, OPT.appGid); } catch (e) { log('chown ' + p + ': ' + e.message); }
+    log('control socket ' + p + ' (uid ' + uid + ', gid ' + OPT.appGid + ', mode 660)');
   });
-  srv.on('error', function (e) { log('socket error: ' + e.message); process.exit(1); });
   return srv;
 }
 
-// ---- DoIP server (the side a tool connects to) ------------------------------
-// A deliberately small subset: routing activation, alive check, and diagnostic
-// messages. Everything else is answered with a negative ack rather than guessed.
-var DOIP_V = 0x02;
-function doipFrame(type, payload) {
-  var head = Buffer.alloc(8);
-  head[0] = DOIP_V; head[1] = (~DOIP_V) & 0xff;
-  head.writeUInt16BE(type, 2);
-  head.writeUInt32BE(payload.length, 4);
-  return Buffer.concat([head, payload]);
+// ---- probe / status ------------------------------------------------------------
+function probe() {
+  log('interfaces:');
+  ifaceList().forEach(function (i) { log('   ' + i.name + '  ' + (i.address || '-') + '  ' + (i.mac || '')); });
+  log('wireless (iw dev):');
+  var devs = iwDevs();
+  if (!devs.length) log('   (none reported)');
+  devs.forEach(function (d) { log('   ' + d.phy + ' ' + d.iface + '  type ' + d.type + (d.channel ? '  channel ' + d.channel : '')); });
+  var cap = apCapability();
+  log('AP mode supported:       ' + (cap.known ? (cap.ap ? 'YES' : 'NO') : 'unknown (' + cap.why + ')'));
+  log('interface combinations:  ' + (cap.combos || 'not reported'));
+  log('  -> a separate AP next to the car\'s Wi-Fi needs a combination that allows AP alongside the current mode(s)');
+  ['hostapd', 'dnsmasq', 'iw', 'ip', 'iptables', 'nft'].forEach(function (b) { log('tool ' + b + ': ' + (has(b) ? 'present' : 'MISSING')); });
+  var other = sh('pgrep -a hostapd 2>/dev/null');
+  log('hostapd already running: ' + (other.ok && other.out.trim() ? other.out.trim().replace(/\n/g, ' | ') : 'no'));
+  log('node: ' + process.version + '   socket(s): ' + OPT.socks.join(', '));
+  log('');
+  log('Nothing was changed. If AP mode is NO or hostapd is MISSING this unit cannot host its own');
+  log('network; the app\'s bridge still works on any network the car is already on.');
 }
-
-function startDoip() {
-  var srv = net.createServer(function (c) {
-    lastActivity = Date.now();
-    var peer = { ip: c.remoteAddress, mac: null };
-    log('tool connected from ' + peer.ip);
-    var buf = Buffer.alloc(0);
-    c.on('data', function (d) {
-      lastActivity = Date.now();
-      buf = Buffer.concat([buf, d]);
-      while (buf.length >= 8) {
-        var type = buf.readUInt16BE(2), len = buf.readUInt32BE(4);
-        if (len > 8 * 1024 * 1024) { try { c.destroy(); } catch (e) {} return; }
-        if (buf.length < 8 + len) break;
-        var payload = buf.slice(8, 8 + len);
-        buf = buf.slice(8 + len);
-        handleDoip(c, peer, type, payload);
-      }
-    });
-    c.on('error', function () {});
-    c.on('close', function () { log('tool disconnected'); });
+function askStatus() {
+  var c = net.connect(OPT.socks[0]), buf = '';
+  c.on('connect', function () { c.write(JSON.stringify({ id: 's1', cmd: 'status' }) + '\n'); });
+  c.on('data', function (d) {
+    buf += String(d);
+    if (buf.indexOf('\n') >= 0) { process.stdout.write(JSON.stringify(JSON.parse(buf.split('\n')[0]), null, 2) + '\n'); c.destroy(); }
   });
-  srv.on('error', function (e) { log('DoIP listen error: ' + e.message); });
-  // Bind to the AP address only when we host the AP, so the listener is not
-  // exposed on whatever other networks the unit happens to be on.
-  var host = (AP.up && !OPT.noAp) ? AP.address : '0.0.0.0';
-  srv.listen(OPT.doipPort, host, function () { log('DoIP on ' + host + ':' + OPT.doipPort); });
-  return srv;
-}
-
-function handleDoip(c, peer, type, payload) {
-  if (type === 0x0005) {                       // routing activation request
-    var src = payload.length >= 2 ? payload.readUInt16BE(0) : 0x0e00;
-    var res = Buffer.alloc(9);
-    res.writeUInt16BE(src, 0);
-    res.writeUInt16BE(0x1000, 2);              // our logical address
-    res[4] = appSock ? 0x10 : 0x06;            // 0x10 accepted; 0x06 = not authenticated
-    c.write(doipFrame(0x0006, res));
-    return;
-  }
-  if (type === 0x0007) { c.write(doipFrame(0x0008, Buffer.alloc(0))); return; }  // alive check
-  if (type !== 0x8001) {                        // anything else: not supported
-    c.write(doipFrame(0x0000, Buffer.from([0x02])));
-    return;
-  }
-  // diagnostic message: [srcAddr(2)][targetAddr(2)][uds...]
-  if (payload.length < 5) return;
-  var sa = payload.readUInt16BE(0), ta = payload.readUInt16BE(2);
-  var uds = Array.prototype.slice.call(payload.slice(4));
-  if (!appSock) {                               // nothing attached: refuse, never guess
-    var nk = Buffer.alloc(5);
-    nk.writeUInt16BE(ta, 0); nk.writeUInt16BE(sa, 2); nk[4] = 0x02;
-    c.write(doipFrame(0x8003, nk));             // diagnostic message negative ack
-    return;
-  }
-  // positive ack, then ask the app (which decides whether it may go to the car)
-  var ack = Buffer.alloc(5);
-  ack.writeUInt16BE(ta, 0); ack.writeUInt16BE(sa, 2); ack[4] = 0x00;
-  c.write(doipFrame(0x8002, ack));
-
-  var id = 'r' + (relaySeq++);
-  var timer = setTimeout(function () { if (pending[id]) { delete pending[id]; } }, 8000);
-  pending[id] = function (respBytes) {
-    clearTimeout(timer);
-    if (!respBytes || !respBytes.length) return;
-    var body = Buffer.concat([Buffer.from([(ta >> 8) & 0xff, ta & 0xff, (sa >> 8) & 0xff, sa & 0xff]),
-      Buffer.from(respBytes)]);
-    try { c.write(doipFrame(0x8001, body)); } catch (e) {}
-  };
-  appSend({ t: 'uds', id: id, ecu: ta & 0xff, data: uds, peer: peer });
+  c.on('error', function (e) { log('daemon not reachable on ' + OPT.socks[0] + ': ' + e.message); process.exit(1); });
 }
 
 // ---- main ------------------------------------------------------------------
-var appServer = null, doipServer = null, idleTimer = null;
+var servers = [], ticker = null;
 
 function shutdown(code) {
-  try { apStop(); } catch (e) {}
-  try { if (appServer) appServer.close(); } catch (e) {}
-  try { if (doipServer) doipServer.close(); } catch (e) {}
-  try { if (idleTimer) clearInterval(idleTimer); } catch (e) {}
-  try { fs.unlinkSync(OPT.sock); } catch (e) {}
-  try { fs.unlinkSync(path.join(OPT.runDir, 'hostapd.conf')); } catch (e) {}
-  process.exit(code || 0);
+  try { clearInterval(ticker); } catch (e) {}
+  apStop(function () {
+    OPT.openIfaces.forEach(function (i) { fwCloseIface(i); });
+    servers.forEach(function (s) { try { s.close(); } catch (e) {} });
+    OPT.socks.forEach(function (p) { try { fs.unlinkSync(p); } catch (e) {} });
+    process.exit(code || 0);
+  });
 }
 
 function main() {
-  if (OPT.probe) { probe(); process.exit(0); }
+  if (OPT.probe) { probe(); return; }
+  if (OPT.status) { askStatus(); return; }
+  log('starting (pid ' + process.pid + ', node ' + process.version + ') - no Wi-Fi is broadcast until the app asks');
+  try { fs.mkdirSync(OPT.runDir, 0x1ed); } catch (e) {}
+  try { fs.chmodSync(OPT.runDir, 0x1ed); } catch (e) {}
 
-  log('starting (pid ' + process.pid + ')');
-  appServer = startAppServer();
-  var apRes = apStart();
-  if (!apRes.ok) log('access point not started: ' + apRes.why + '  (the relay still works over an existing network)');
-  doipServer = startDoip();
+  var first = OPT.socks[0], pending = OPT.socks.length;
+  OPT.socks.forEach(function (p) {
+    prepareSocketPath(p, function (free) {
+      if (!free) {
+        if (p === first) { log('another beem-bridged is already running on ' + p + ' - exiting'); process.exit(0); }
+        log('socket ' + p + ' is in use by another process - skipped');
+      } else servers.push(serveApp(p));
+      pending--;
+    });
+  });
 
-  // Idle shutdown: never leave an access point broadcasting for a session
-  // somebody forgot about.
-  idleTimer = setInterval(function () {
-    if (OPT.idleSec > 0 && (Date.now() - lastActivity) > OPT.idleSec * 1000) {
-      log('idle for ' + OPT.idleSec + 's - shutting down');
-      shutdown(0);
-    }
+  // Optional: open the bridge ports on the car's own Wi-Fi as well (the
+  // DIRECT-BMW network), for when its firewall is what stops a phone.
+  OPT.openIfaces.map(cleanIface).filter(Boolean).forEach(function (i) { fwOpen(i); log('firewall opened on ' + i); });
+
+  // Bring the network down when nobody needs it; the daemon itself stays up.
+  ticker = setInterval(function () {
+    if (AP.state !== 'up') return;
+    if (stations().length) lastJoined = Date.now();
+    if (!appSock && appGoneAt && Date.now() - appGoneAt > 60000) { log('app gone for 60 s - taking the network down'); apStop(); return; }
+    if (Date.now() - Math.max(lastJoined, AP.since) > OPT.idleSec * 1000) { log('nobody joined for ' + OPT.idleSec + ' s - taking the network down'); apStop(); }
   }, 15000);
 
-  ['SIGINT', 'SIGTERM', 'SIGHUP'].forEach(function (sig) {
-    process.on(sig, function () { log('signal ' + sig); shutdown(0); });
-  });
+  ['SIGINT', 'SIGTERM', 'SIGHUP'].forEach(function (sig) { process.on(sig, function () { log('signal ' + sig); shutdown(0); }); });
   process.on('uncaughtException', function (e) { log('fatal: ' + ((e && e.stack) || e)); shutdown(1); });
 }
 
-// Only run when executed directly; `require()` (the tests) just gets the pieces.
 if (require.main === module) main();
 
 module.exports = {
-  genPass: genPass, doipFrame: doipFrame, stations: stations, apCapable: apCapable,
-  onAppLine: onAppLine, stateMsg: stateMsg, handleDoip: handleDoip, AP: AP, OPT: OPT,
-  _setAppSock: function (s) { appSock = s; }, _pending: function () { return pending; }
+  genPass: genPass, cleanText: cleanText, cleanIface: cleanIface, onAppLine: onAppLine, stateMsg: stateMsg,
+  apCapability: apCapability, iwDevs: iwDevs, AP: AP, OPT: OPT, FW: FW, TCP_PORTS: TCP_PORTS, UDP_PORTS: UDP_PORTS,
+  _setAppSock: function (s) { appSock = s; }
 };

@@ -50,9 +50,9 @@ class BridgeDeploy(unittest.TestCase):
         os.environ['SSH_LOG'] = self.log_file
         os.environ['SANDBOX'] = self.sandbox
 
-    def run_beem(self, action):
+    def run_beem(self, action, **opts):
         lines = []
-        code, out = bi.do_beem(action, self.stub, '127.0.0.1', self.key, log=lines.append)
+        code, out = bi.do_beem(action, self.stub, '127.0.0.1', self.key, log=lines.append, **opts)
         cmds = []
         if os.path.isfile(self.log_file):
             with open(self.log_file) as f:
@@ -84,6 +84,25 @@ class BridgeDeploy(unittest.TestCase):
         self.assert_copied('beem-bridge', 'install.sh')
         self.assertTrue(any(c.endswith('&& sh install.sh') for c in cmds), 'did not run install.sh')
         self.assertFalse(any('--probe' in c for c in cmds))
+
+    def test_install_passes_the_app_uid_and_switches(self):
+        code, cmds, _ = self.run_beem('install', app_uid='777', take_iface=True, channel='36')
+        self.assertEqual(code, 0)
+        self.assertTrue(any(c.endswith('sh install.sh --app-uid 777 --channel 36 --take-iface') for c in cmds),
+                        'install did not carry the app uid / switches: %s' % cmds[-1:])
+
+    def test_install_refuses_a_non_numeric_app_uid(self):
+        with self.assertRaises(bi.InstallerError):
+            self.run_beem('install', app_uid='12261; reboot')
+
+    def test_status_queries_the_helper_read_only(self):
+        code, cmds, _ = self.run_beem('status')
+        self.assertEqual(code, 0)
+        self.assert_copied('beem-bridge', 'install.sh')
+        self.assertTrue(any(c.endswith('sh install.sh --status') for c in cmds), 'did not run --status')
+        # status is read-only: it never pushes the daemon or runs a bare install
+        self.assertFalse(any(c.endswith('beem-bridged.js') for c in cmds if c.startswith('cat >')))
+        self.assertFalse(any(c.endswith('&& sh install.sh') for c in cmds))
 
     def test_uninstall_only_sends_uninstall(self):
         code, cmds, _ = self.run_beem('uninstall')

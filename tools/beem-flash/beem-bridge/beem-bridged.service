@@ -1,22 +1,29 @@
 [Unit]
-# BeeM-Flash wireless bridge helper.
-# Installs and runs the same way the MGU's own GPU renderer (mgu-renderd) and
-# Tailscale do: a root daemon on /var/opt with a unit on the rootfs. It owns the
-# Wi-Fi access point and the DoIP/HSFZ listener; BeeM-Flash (the sandboxed app)
-# attaches to its UNIX socket and decides what may reach the car.
-Description=BeeM-Flash wireless bridge helper
+# BeeM-Flash bridge helper (root). Gives the app's bridge its own Wi-Fi network
+# on demand: a virtual access point next to the car's Wi-Fi, DHCP for the phone,
+# and the firewall opened for the bridge ports on that network only. It does not
+# carry diagnostic traffic and never talks to the car - the app does that.
+# Idle from boot: nothing is broadcast until the app turns "WI-FI: OWN" on.
+Description=BeeM-Flash bridge helper (own Wi-Fi for the app's bridge)
 After=network.target
 Wants=network.target
 
 [Service]
 Type=simple
-# NODE is substituted by install.sh with the unit's own node path.
-ExecStart=__NODE__ /var/opt/beem-bridge/beem-bridged.js
-Restart=on-failure
+# __NODE__ and __ARGS__ are filled in by install.sh.
+ExecStart=__NODE__ /var/opt/beem-bridge/beem-bridged.js __ARGS__
+# Long-running by design: come back after ANY exit, including a clean one.
+Restart=always
 RestartSec=5
-# Writes nothing persistent outside /run; the AP goes down when the service stops.
+# /run/beem-bridge holds the control socket, hostapd.conf and DHCP leases; it is
+# removed when the service stops. 0755 so the sandboxed app can reach the socket.
 RuntimeDirectory=beem-bridge
+RuntimeDirectoryMode=0755
 User=root
+# SIGTERM lets the daemon take its network down, remove its firewall rules and
+# delete its virtual interface before exiting.
+KillSignal=SIGTERM
+TimeoutStopSec=15
 
 [Install]
 WantedBy=multi-user.target

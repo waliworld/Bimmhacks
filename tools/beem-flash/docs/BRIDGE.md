@@ -1,51 +1,48 @@
-# Wireless bridge (phone / xHP → MGU → car) — design & status
+# Wireless bridge (phone / MHD / xHP → MGU → car) — design & status
 
-**Status: feasibility-gated groundwork. No bridge ships yet. It is OFF by design
-and cannot run until an owner settles the on-car probes below.** This records what
-is proven, what is not, the architecture, and the security model, so the build is
-honest at every step.
+**Status:** the app hosts the bridge itself (proven on the car: its listener binds
+and passes its own self-test). An optional root helper adds a separate Wi-Fi
+network for it. Still unproven on the car: a phone tool completing a session —
+that is the next on-car test.
 
 ## The goal
 
-Let an external tool (e.g. **xHP**, a ZF8HP transmission tuner that speaks
-ENET/DoIP) connect to the head unit over Wi-Fi/tether and reach the car's modules
-**through the MGU**, so no ENET cable or paid Wi-Fi-ENET adapter is needed. The
-owner's own car; open-source; **built secure and consent-gated** or not at all.
+Let an external tool (MHD, xHP, BimmerLink, E-Sys, ISTA…) connect to the head unit
+over Wi-Fi and reach the car's modules **through the MGU**, with no ENET cable or
+paid Wi-Fi adapter. The owner's own car; open source; consent-gated on screen.
 
-## What is and isn't possible (verified)
+## What is proven / what is not
 
-- **The iDrive app cannot be the bridge.** The app sandbox has no network
-  capability — no socket field anywhere in the app model, and no app in the proven
-  on-car corpus opens an IP socket. A listener MUST live in a privileged daemon.
-- **A root system daemon CAN run on the MGU.** Proven by the MIT `mgu-renderd`
-  daemon (systemd unit + UNIX socket) and by Tailscale (root `tailscaled`). It is
-  installed via the community deploy path or the Store, persists on `/var/opt` with
-  a unit on the rootfs.
-- **The app can be a UNIX-socket *client*** to that daemon (the MIT `redline` app
-  does exactly this to talk to `renderd`).
-- **TASU reaches the modules** (`InternalTasu`, already how BeeM-Flash reads the DME
-  `0x12` and, per the MIT `zf8hp` app, the EGS `0x18` — no cable).
-- **UNKNOWN, and the make-or-break:** whether a phone on the hotspot can open a TCP
-  connection to a listener on the MGU's `wlan0`. Nothing in any repo shows it.
-  **Only an on-car probe settles it.**
-- **NOT pursued:** a head-unit route straight to the car's gateway DoIP endpoint —
-  zero grounding; kept only as an optional, unverified track if a probe finds one.
+| | |
+|---|---|
+| **The app can listen** | Yes — on the car (uid 12261, not root) it binds TCP 6801 and 13400 on every interface and its loopback self-test passes. Ports below 1024 are refused (EACCES), which the bridge does not need. |
+| **The app reaches the modules** | Yes — TASU (`InternalTasu`) answers from the DME (P6: GO, VIN read). |
+| **A gateway on the IP side** | Not found. P7's earlier "reachable 160.48.199.99" was the head unit's own address (fixed: P7 now ignores its own addresses). |
+| **A phone reaching the app's listener** | **Not yet shown on the car.** If the car's Wi-Fi isolates clients or firewalls the ports, the root helper's own network is the fallback. |
 
-## Chosen architecture: DoIP-front / TASU-back
+## Architecture
 
 ```
-  phone / xHP ──Wi-Fi, ISO 13400 DoIP──▶  beem-bridged (root daemon)
-                                               │  local UNIX socket (root:tm_oap_app, 0660)
-                                               ▼
-                                         BeeM-Flash app  ──TASU (SOME/IP)──▶  DME 0x12 / EGS 0x18
+                         ┌─────────────────────── head unit ───────────────────────┐
+ phone / tool ──Wi-Fi──▶ │ BeeM-Flash app listener  ── TASU (SOME/IP) ──▶ gateway / DME / EGS
+   (MHD, xHP, …)         │  TCP 6801 HSFZ · TCP 13400 DoIP · UDP 6811/13400 discovery │
+                         │  every request judged on-screen (bridgegate + relaypolicy) │
+                         │                                                           │
+                         │ beem-bridged (root, optional): separate Wi-Fi AP on a     │
+                         │  virtual interface + DHCP + firewall opened for the ports │
+                         └───────────────────────────────────────────────────────────┘
 ```
 
-The daemon owns the Wi-Fi listener and the ISO 13400 server; it speaks **only** to
-`wlan0` and a local socket, **never to the car's network**. The **app is the single
-policy authority**: it re-validates every relayed frame (`relaypolicy.js`) and never
-accepts an allow-list or a "flashing" flag from the daemon, which is treated as
-untrusted toward the car. The car-side leg is TASU — the same path the app's own
-flasher already uses — so the relay adds **no new vehicle-side unknown**.
+* **The app is the bridge.** One protocol implementation (`bridgeserver.js`,
+  `discovery.js`), behaving like a real BMW gateway: HSFZ ACKs, identification
+  `0x0011` (`DIAGADR10BMWMAC…BMWVIN…`), alive check, DoIP routing activation and
+  vehicle announcement. It listens on every interface, so it serves the car's own
+  Wi-Fi, a phone hotspot the car joined, and the helper's network alike.
+* **The helper only does what needs root** (`tools/beem-bridge`, see
+  [INSTALL.md](../tools/beem-bridge/INSTALL.md)): create a separate Wi-Fi network
+  next to the car's own (so CarPlay keeps working), give the phone an address,
+  open the firewall for the bridge ports on that network, and check as root that
+  the app answers there. It never carries diagnostic traffic and holds no policy.
 
 ## Security model (already built, with tests)
 
@@ -56,19 +53,21 @@ flasher already uses — so the relay adds **no new vehicle-side unknown**.
   seconds on loss, disarm, app exit, sleep, ignition-off, or motion). Flashing is a
   **separate** write-arm for one named ECU, reusing the local flasher's confirm chain.
 - **Strict re-validation in the app.** Relayed frames may address only an ECU
-  allow-list (default `0x12`, `0x18`); **functional/broadcast from the phone is
+  allow-list (default gateway `0x10`, DME `0x12`, EGS `0x18`; reads only); **functional/broadcast from the phone is
   refused**; `clearDTC` and all writes are separately armed; disallowed frames get a
   UDS negative, not silent passthrough. The phone's tester source is collapsed to the
   one TASU tester (`0xF2`).
-- **One pinned peer.** Bind the `wlan0` address only (never `0.0.0.0`); accept one
-  connection pinned to the approved IP/MAC; others get RST. A scoped firewall rule is
-  added only while armed and removed on disarm/stop.
+- **One pinned peer per armed session.** The listener serves every interface (the
+  phone's network cannot be known in advance), so the protection is the gate: nothing
+  is relayed until the bridge is armed on the car's screen, and the first device in an
+  armed session owns it — any other device is refused. The helper's firewall rules are
+  scoped to its own network and removed when that network goes down.
 - **No secrets, no content trust, plaintext disclosure.** The bridge bundles no keys
   or calibration and cannot validate a third-party tool's flash content; the Wi-Fi leg
   is plaintext (xHP presents no token), so safety rests on the WPA2 hotspot + in-car
   approval + source pinning. USB tether preferred where client-isolation is weak.
-- **Protects what works.** A missing/stopped daemon leaves install, live data, the
-  flasher and the theme fully functional (the app is only a client).
+- **Protects what works.** The helper is optional: without it the app's bridge,
+  live data, the flasher and the theme all work; it only adds a separate network.
 
 ## On-car probes (run these first — nothing depends on code until they pass)
 
