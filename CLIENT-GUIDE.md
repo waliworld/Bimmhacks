@@ -8,8 +8,10 @@ Three things, in order, on BMWs with the **MGU head unit (iDrive 7 & 8)**:
    car's own screen (RideTube, cluster/HUD maps, IterioDev's car-apps, and your own repo).
 
 Apps are **not** built on the PC any more: they come from the on-car Store. The installer window has
-three tabs — **Root access → App Store → Credits.** The **Car** panel at the top (VIN, head unit, root
-SSH key, IP address) is shared, and the **Activity** log at the bottom shows what every button did.
+tabs — **Root access → iDrive 7 Base → App Store → Wireless Bridge → Credits.** (iDrive 7 Base and
+Wireless Bridge are experimental; most cars only need Root access and App Store.) The **Car** panel at the
+top (VIN, head unit, root SSH key, IP address) is shared, and the **Activity** log at the bottom shows
+what every button did.
 
 > Flashing app and installer developed by **Mr. Wali**. Root tool and Store are open source — see the
 > **Credits** tab.
@@ -88,6 +90,24 @@ write it back:
 > **Experimental.** A wrong coding write can leave the HMI partly-coded. Keep **BimmerCode / E-Sys /
 > Autel** ready — the saved `.ncd` files load straight into E-Sys — and prefer them if you are unsure.
 > Pick the backup with **Browse** (the latest is filled in for you).
+
+## iDrive 7 Base (early MGU)
+
+Some of the **earliest MGU iDrive 7 units** — for example a pre-LCI **F90 M5 (2019-2020)** — report a
+different bootloader (**BTLD**) than the cars the root tool was built for. Root works by flashing a debug
+image matched to the unit's bootloader and security, and the catalog currently covers one bootloader
+(`00003F36`, the verified cars). A base unit's different bootloader is why **Flash + enable SSH** on the
+Root access tab refuses it. This tab is **separate** and never changes how those verified cars are rooted.
+
+- **Identify unit (read-only)** — reads the unit's software versions (SVK), shows its **BTLD**, and says
+  whether it is the supported type or an early / base MGU. It writes a small profile to `base-profiles/`.
+  If it reads *early / base*, root is not in the catalog for that bootloader yet — **that profile is
+  exactly what's needed to add support**, so send it over. **Open profiles folder** opens that folder.
+- **Attempt root (force — brick risk)** — experimental. It overrides the bootloader check and tries the
+  standard debug image anyway. Because the image and security are for a different bootloader, it will
+  **most often stop at the security step with nothing written**, but a mismatch that gets further can
+  leave the unit **unbootable**. Do this only on a car you own and are willing to risk, with **E-Sys /
+  ISTA** ready. It requires the coding-backup confirmation and a second brick-risk confirmation.
 
 ## App Store
 

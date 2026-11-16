@@ -31,7 +31,7 @@ it. Stage C (App Store) needs internet at the car (or a prepared USB stick).
 """
 import argparse, hashlib, json, os, queue, re, shutil, stat, subprocess, sys, tempfile, threading, time
 
-VERSION = '1.12.0'
+VERSION = '1.13.0'
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 DEFAULT_IP = '169.254.36.47'                # the unit's address with the idrive7-8-ssh-root tool
@@ -307,7 +307,7 @@ def newest_enrolled_key(vin=None):
 
 
 def run_ssh_root(action, log, vin=None, ip=None, gateway='auto', arch='id7', persist=False,
-                 keep_debug=False, unique_key=False, verbose=False):
+                 keep_debug=False, unique_key=False, verbose=False, force=False, restart_wait=None):
     """Run the bundled ssh_enable.py as a subprocess, streaming its output. -> exit code."""
     ensure_cryptography(log)
     argv = [sys.executable, SSHROOT_PY, action, '--yes']
@@ -319,6 +319,10 @@ def run_ssh_root(action, log, vin=None, ip=None, gateway='auto', arch='id7', per
         argv += ['--gateway', gateway]
     if arch and arch != 'id7':
         argv += ['--arch', arch]
+    if force:                         # iDrive 7 Base only: skip the BTLD 00003F36 gate (brick risk)
+        argv.append('--force')
+    if restart_wait:
+        argv += ['--restart-wait', str(int(restart_wait))]
     if persist:
         argv.append('--persist')
     if keep_debug:
@@ -415,6 +419,52 @@ def vin_from_output(lines):
 # ------------------------------------------------------- coding snapshot (before flashing)
 
 CODING_BACKUP_DIR = os.path.join(REPO, 'coding-backups')
+BASE_PROFILE_DIR = os.path.join(REPO, 'base-profiles')     # iDrive 7 Base: saved unit identity readouts
+
+
+def do_base_identity(log, vin=None, ip=None, gateway='auto', out_dir=None):
+    """iDrive 7 Base, READ-ONLY: read the unit's identity (SVK / BTLD) and save a profile. It tells you
+    whether this is the supported MGU type (BTLD 00003F36 -> use the Root access tab) or an early / base MGU
+    whose bootloader is outside the current debug catalog (which is why root flashing is refused on it).
+    -> the saved profile path."""
+    out_dir = out_dir or BASE_PROFILE_DIR
+    log('Reading the unit identity over ENET (read-only - nothing is written to the car) ...')
+    code, lines = _run_coding(['identity', '--out', out_dir], log, gateway=gateway, ip=ip)
+    if code == 0:
+        log('Verdict: SUPPORTED MGU bootloader. Root this car on the "Root access" tab (not here).')
+    elif code == 3:
+        log('Verdict: early / base MGU - its bootloader (BTLD) is not 00003F36, so it is outside the root '
+            'tool\'s debug catalog. Root flashing is not available for this unit yet. The saved profile is '
+            'exactly what is needed to add support - send it to the developer.')
+    else:
+        log('Could not read the unit. Is the ENET cable in, the ignition on, and the car awake?')
+        raise InstallerError('The unit identity could not be read over ENET.')
+    return next((l.split(': ', 1)[1].strip() for l in lines if l.startswith('Unit profile written to')), out_dir)
+
+
+def do_base_root_force(log, vin=None, ip=None, gateway='auto', backup_confirmed=False):
+    """iDrive 7 Base, EXPERIMENTAL, BRICK RISK: attempt the root flash on an early / base MGU by overriding
+    the BTLD gate (--force), with a longer post-reset wait. The debug image and M7F1 security operands are
+    captured for BTLD 00003F36 only, so on a different bootloader this most often stops at SecurityAccess
+    (no write), but a mismatch that gets further can leave the unit unbootable. Fully separate from the
+    verified Root access path - that path never forces. -> the SSH key path, or None."""
+    require_backup_confirmation('flash', backup_confirmed)
+    if not (vin and re.match(r'^[A-HJ-NPR-Z0-9]{17}$', vin.upper())):
+        raise InstallerError('A valid 17-character VIN is needed to flash. Use "Detect VIN", or type it in.')
+    log('EXPERIMENTAL iDrive 7 Base root attempt - overriding the BTLD gate (--force). BRICK RISK.')
+    log('Keep a coding backup and have E-Sys / ISTA ready for recovery. If this unit is not BTLD 00003F36,')
+    log('the image and security do not match it and this will most likely stop at the security step.')
+    code = run_ssh_root('flash', log, vin=vin, ip=ip, gateway=gateway, arch='id7',
+                        persist=True, force=True, restart_wait=40)
+    if code:
+        raise InstallerError('The base root attempt did not complete (exit %d; see the log above). Read the '
+                             'log: a stop at SecurityAccess means the unit is a different type - no write was made.' % code)
+    key = newest_enrolled_key(vin)
+    if key:
+        log('Root SSH is enabled. The car SSH key is: %s' % key)
+        return key
+    log('Done, but no SSH key file was found under %s.' % SSHROOT_ENROLL)
+    return None
 
 
 def _run_coding(args, log, gateway='auto', ip=None, arch='id7'):
@@ -1408,6 +1458,71 @@ def run_gui():
     vr2 = row(c1b, pady=(0, 12))
     button(vr2, 'Restore coding (experimental)', lambda: on_restore(False), style='Danger.TButton')
 
+    # ======================================================= 1b. iDrive 7 Base (early MGU)
+    p5 = section('iDrive 7 Base')
+    l5, r5c = two_up(p5, (3, 2))
+    c5 = card(l5, pady=(0, 10), padx=(22, 6))
+    kicker(c5, 'Early / base MGU  ·  experimental')
+    title(c5, 'iDrive 7 Base (early MGU)')
+    para(c5, 'For the earliest MGU iDrive 7 units (e.g. pre-LCI F90 M5, 2019-2020) that the Root access tab '
+             'refuses. The root tool\'s debug catalog covers one bootloader (BTLD 00003F36); these base units '
+             'report a different one, so the normal flash is refused. This tab is separate and never changes '
+             'how the verified cars (2023 G87 iDrive 8, 2023 X3M40i iDrive 7) are rooted.', wrap=470)
+    notice(c5, 'Start with "Identify unit" (read-only). If it reads early / base, root is not in the catalog '
+               'for that bootloader yet - the saved profile is exactly what is needed to add it. "Attempt root '
+               '(force)" is an experimental long shot with a BRICK RISK.', wrap=470)
+    base_backup = tk.BooleanVar(value=False)
+
+    def open_profiles():
+        os.makedirs(BASE_PROFILE_DIR, exist_ok=True)
+        _open_path(BASE_PROFILE_DIR)
+
+    def on_base_identity():
+        vin, _, ip, _ = conn_values()
+        start(lambda: do_base_identity(log, vin=vin or None, ip=ip or None),
+              'Unit identity read - see the activity log, and the saved profile in base-profiles/.')
+
+    def on_base_root():
+        vin, _, ip, _ = conn_values()
+        if not base_backup.get():
+            messagebox.showwarning('iDrive 7 Base', 'Tick the coding-backup confirmation first - a flash wipes '
+                                   'the coding, and this is a brick-risk attempt.')
+            return
+        if not messagebox.askokcancel('iDrive 7 Base - BRICK RISK',
+                'EXPERIMENTAL force-root of an early / base MGU.\n\nThe debug image and security are built for '
+                'BTLD 00003F36. On a different bootloader this usually stops at the security step (no write is '
+                'made), but a mismatch that gets further can leave the unit UNBOOTABLE.\n\nDo this only on a car '
+                'you own and are willing to risk, with E-Sys / ISTA ready for recovery. Continue?', icon='warning'):
+            return
+        def w():
+            key = do_base_root_force(log, vin=vin or None, ip=ip or None, backup_confirmed=True)
+            if key:
+                ui_set(key_var, key)
+                got = ip_from_key(key)
+                if got:
+                    ui_set(ip_var, got)
+                set_chip('Base rooted (forced)', 'good')
+        start(w, 'Base root attempt finished - see the activity log.')
+
+    bi1 = row(c5, pady=(10, 4))
+    button(bi1, 'Identify unit (read-only)', on_base_identity, style='Accent.TButton')
+    button(bi1, 'Open profiles folder', open_profiles)
+    bchk = row(c5, pady=(8, 0))
+    ttk.Checkbutton(bchk, variable=base_backup,
+                    text='I have a coding backup (this tool, BimmerCode / E-Sys or Autel)').pack(side='left', padx=4)
+    bi2 = row(c5, pady=(4, 12))
+    button(bi2, 'Attempt root (force - brick risk)', on_base_root, style='Danger.TButton')
+
+    # ---- right: why it fails ---------------------------------------------------------------------
+    c5b = card(r5c, pady=(0, 10), padx=(6, 22))
+    kicker(c5b, 'Why it fails')
+    title(c5b, 'The bootloader catalog')
+    para(c5b, 'Root works by flashing a debug image that matches the unit\'s bootloader (BTLD) and its '
+              'security keys. The catalog has one today: BTLD 00003F36 (the verified cars). An early / base '
+              'MGU reports a different BTLD, so there is no matching image - forcing the wrong one is what '
+              'risks a brick. "Identify unit" captures the exact BTLD and software levels so support can be '
+              'added safely for that unit.', wrap=320)
+
     # ======================================================= 2. App Store
     p2 = section('App Store')
     l2, r2c = two_up(p2, (3, 2))
@@ -1717,7 +1832,8 @@ def main(argv=None):
                     choices=['gui',
                              'root-status', 'root-flash', 'root-enable', 'root-fix-key', 'root-disable',
                              'root-enter-prog', 'root-exit-prog',
-                             'detect-vin', 'backup-coding', 'preflight-coding', 'verify-coding', 'restore-coding',
+                             'detect-vin', 'base-identity', 'base-root',
+                             'backup-coding', 'preflight-coding', 'verify-coding', 'restore-coding',
                              'test', 'store-install', 'restart-head-unit',
                              'bridge-probe', 'bridge-install', 'bridge-status', 'bridge-uninstall', 'bridge-car-probe',
                              'bridge-set-code',
@@ -1770,6 +1886,12 @@ def main(argv=None):
         if a.action == 'detect-vin':
             vin = detect_vin(log, ip=a.ip, gateway=a.gateway, arch=a.arch)
             print('VIN: ' + vin if vin else 'VIN not detected (is the ENET cable in and the car awake?)')
+            return
+        if a.action == 'base-identity':
+            do_base_identity(log, vin=a.vin, ip=a.ip, gateway=a.gateway, out_dir=a.out)
+            return
+        if a.action == 'base-root':
+            do_base_root_force(log, vin=a.vin, ip=a.ip, gateway=a.gateway, backup_confirmed=a.confirm_backup)
             return
         if a.action == 'backup-coding':
             do_backup_coding(log, vin=a.vin, ip=a.ip, gateway=a.gateway, arch=a.arch, out_dir=a.out, no_ncd=a.no_ncd)

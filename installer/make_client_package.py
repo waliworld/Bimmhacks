@@ -39,7 +39,7 @@ POCKET_TOP_FILES = ['README.md', 'UPSTREAM.md', 'docs/POCKET.md', 'docs/MAKE-YOU
 POCKET_ONLY = {'installer/pocket', 'installer/pocket_server.py', 'installer/pocket-screenshot.png',
                'docs/POCKET.md'}
 
-SKIP_DIRS = {'.git', '.github', '__pycache__', 'node_modules', 'dist', 'coding-backups',
+SKIP_DIRS = {'.git', '.github', '__pycache__', 'node_modules', 'dist', 'coding-backups', 'base-profiles',
              # the Store package a Pocket box staged for itself (downloaded on the box, not shipped)
              'pocket-store', 'screenshots'}
 SKIP_PATHS = {# tests and their fake car are for developers, not clients

@@ -88,10 +88,11 @@ def mainloop(root, *a):
 
     def run():
         shot('01-root-access')              # root access + the experimental coding-restore card
-        go_tab(1); shot('02-app-store')      # the on-car App Store installer
-        go_tab(2); shot('bridge-locked')     # the access gate testers see before unlocking
-        unlock_bridge(); shot('03-wireless-bridge')  # unlocked: the bridge + developer probes
-        go_tab(3); shot('04-credits')
+        go_tab(1); shot('02-idrive7-base')   # the early / base MGU identity + force-root tab
+        go_tab(2); shot('03-app-store')      # the on-car App Store installer
+        go_tab(3); shot('bridge-locked')     # the access gate testers see before unlocking
+        unlock_bridge(); shot('04-wireless-bridge')  # unlocked: the bridge + developer probes
+        go_tab(4); shot('05-credits')
         print('shots:', len(shots))
         root.destroy()
 
@@ -113,9 +114,9 @@ def finish():
             p = os.path.join(OUT, n)
             subprocess.run(['convert', p, '-colors', '256', '-define', 'png:compression-level=9', p], check=True)
     sheet = os.path.join(OUT, '00-overview.png')
-    tiles = ['01-root-access.png', '02-app-store.png', '03-wireless-bridge.png', '04-credits.png']
+    tiles = ['01-root-access.png', '02-idrive7-base.png', '03-app-store.png', '04-wireless-bridge.png', '05-credits.png']
     if shutil.which('montage') and all(t in names for t in tiles):
-        subprocess.run(['montage'] + [os.path.join(OUT, t) for t in tiles] + ['-tile', '2x2', '-geometry',
+        subprocess.run(['montage'] + [os.path.join(OUT, t) for t in tiles] + ['-tile', '3x2', '-geometry',
                        '680x626+8+8', '-background', '#d9dde3', sheet], check=True)
         if shutil.which('convert'):
             subprocess.run(['convert', sheet, '-depth', '8', '-colors', '256', '-define',

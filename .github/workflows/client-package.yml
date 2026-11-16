@@ -34,6 +34,7 @@ jobs:
           python installer/tests/test_store_source.py
           python installer/tests/test_restart.py
           python installer/tests/test_bridge.py
+          python installer/tests/test_base.py
           python installer/tests/test_noninteractive.py
       - name: "Store source-adding against the real mgu-updater (pinned commit)"
         run: |

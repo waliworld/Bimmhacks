@@ -43,21 +43,31 @@ gates. Build and use: [docs/POCKET.md](docs/POCKET.md) (`installer/pocket_server
 <table>
 <tr>
 <td width="50%"><img src="installer/screenshots/01-root-access.png" alt="Root access"><br><sub><b>Root access.</b> Back up the coding, flash + enable SSH; the experimental coding-restore card is on the right.</sub></td>
-<td width="50%"><img src="installer/screenshots/02-app-store.png" alt="App Store"><br><sub><b>App Store.</b> Install the on-car Store and restart the head unit; add RideTube or your own repo as a source.</sub></td>
+<td width="50%"><img src="installer/screenshots/02-idrive7-base.png" alt="iDrive 7 Base"><br><sub><b>iDrive 7 Base.</b> Early / base MGU units (a different bootloader): a read-only identity diagnostic and a gated, experimental force-root — separate from the verified path.</sub></td>
 </tr>
 <tr>
-<td width="50%"><img src="installer/screenshots/03-wireless-bridge.png" alt="Wireless Bridge"><br><sub><b>Wireless Bridge.</b> Deploy the BeeM-Flash root helper and run its read-only probes (experimental; off until enabled on the car).</sub></td>
-<td width="50%"><img src="installer/screenshots/04-credits.png" alt="Credits"><br><sub><b>Credits.</b> The people and projects behind every part.</sub></td>
+<td width="50%"><img src="installer/screenshots/03-app-store.png" alt="App Store"><br><sub><b>App Store.</b> Install the on-car Store and restart the head unit; add RideTube or your own repo as a source.</sub></td>
+<td width="50%"><img src="installer/screenshots/04-wireless-bridge.png" alt="Wireless Bridge"><br><sub><b>Wireless Bridge.</b> Deploy the BeeM-Flash root helper and run its read-only probes (experimental; access-code gated).</sub></td>
+</tr>
+<tr>
+<td width="50%"><img src="installer/screenshots/05-credits.png" alt="Credits"><br><sub><b>Credits.</b> The people and projects behind every part.</sub></td>
+<td width="50%"></td>
 </tr>
 </table>
 
-Four tabs, worked left to right:
+Five tabs, worked left to right:
 
 - **Root access.** Detect the VIN by broadcast, **back up the coding** over ENET, then **Flash + enable
   SSH** — which forces a backup first (take one now, or confirm a warning that you have one from another
   tool). **Fix blue screen** recovers a unit stuck in programming mode. The card on the right is the
   experimental **coding restore** — Verify / Dry run / Restore, which can write the captured coding (NCD)
   back after a flash and read it back to check.
+- **iDrive 7 Base.** For the earliest MGU iDrive 7 units (e.g. pre-LCI F90 M5, 2019-2020) that the Root
+  access tab refuses. The root tool's debug catalog covers one bootloader (BTLD `00003F36`); base units
+  report a different one, so the normal flash is refused. **Identify unit** (read-only) reads the unit's
+  BTLD and saves a profile — the exact data needed to add support; **Attempt root (force)** is an
+  experimental, brick-risk long shot. This tab is fully separate and never changes how the verified cars
+  (2023 G87 iDrive 8, 2023 X3M40i iDrive 7) are rooted.
 - **App Store.** Install the on-car MGU **App Store** (its renderer and internet uplink, each explained),
   and the installer restarts the head unit for you so the Store comes up. Add **RideTube** (and your own
   repo) to it in one click — from there every app installs on the car, from the Store.
@@ -144,6 +154,8 @@ python3 installer/bimmhacks_installer.py restore-coding --backup <backup.json> -
 python3 installer/bimmhacks_installer.py restore-coding --backup <backup.json> --confirm-restore  # EXPERIMENTAL write-back
 python3 installer/bimmhacks_installer.py root-flash --vin <VIN> --confirm-backup   # enable root SSH (ENET); refuses without the flag
 python3 installer/bimmhacks_installer.py root-exit-prog --ip <ip>   # recovery: leave programming mode (stuck blue screen); no flash
+python3 installer/bimmhacks_installer.py base-identity --out base-profiles   # iDrive 7 Base: read-only BTLD / SVK readout + profile
+python3 installer/bimmhacks_installer.py base-root --vin <VIN> --confirm-backup   # iDrive 7 Base: EXPERIMENTAL force-root (brick risk)
 python3 installer/bimmhacks_installer.py store-install --key <id_rsa> --restart    # install the App Store, restart the head unit
 python3 installer/bimmhacks_installer.py restart-head-unit --key <id_rsa>          # restart it (the Store only starts after one)
 python3 installer/bimmhacks_installer.py install-ridetube --key <id_rsa>           # add RideTube to the Store's sources

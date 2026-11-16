@@ -137,6 +137,52 @@ def _now():
     return datetime.datetime.now().strftime('%Y%m%dT%H%M%S')
 
 
+SUPPORTED_BTLD = '00003F36'      # the one MGU bootloader the root tool's debug catalog covers
+
+
+def read_identity(gateway='auto', mgu_ip=None, vin=None, out=None, log=print):
+    """Read-only unit identity for the iDrive 7 Base diagnostic: the full SVK (BTLD / SWFL / CAFD / HWEL),
+    VIN, and whether the bootloader is the root tool's supported type (BTLD 00003F36). Early / base MGU
+    units report a different BTLD, which is why the root flash refuses them. Writes a profile file when out
+    is given. It never writes to the car. -> the identity dict."""
+    from mgu7 import diag
+    client, gw, found_vin = _open_client(gateway, mgu_ip, vin, log)
+    try:
+        log('Reading the unit identity (software versions / SVK) ...')
+        svk = diag.read_svk(client)
+        btld = svk.find('BTLD')
+        info = {'tool': 'bimmhacks base identity', 'taken': _now(), 'gateway': gw, 'vin': found_vin,
+                'svk': [str(r) for r in svk.records],
+                'btld': btld.version_hex() if btld else None,
+                'btld_trip': btld.trip_text() if btld else None,
+                'supported_btld': SUPPORTED_BTLD,
+                'is_supported_mgu': bool(svk.is_supported_mgu()),
+                'is_nbt': bool(svk.is_nbt())}
+        for r in svk.records:
+            log('  ' + str(r))
+        if info['is_supported_mgu']:
+            log('BTLD %s -> the SUPPORTED MGU debug catalog. Use the Root access tab; if login is still '
+                'refused there, use "Fix refusing key".' % info['btld'])
+        elif info['is_nbt']:
+            log('This is an NBT / EVO (iDrive 6) unit, not an MGU - root over ENET is not available.')
+        else:
+            log('BTLD %s -> NOT the supported %s. This is an early / base MGU outside the current debug '
+                'catalog; that is why root flashing is refused on it.' % (info['btld'], SUPPORTED_BTLD))
+        if out:
+            os.makedirs(out, exist_ok=True)
+            path = os.path.join(out, 'base-profile-%s-%s.json' % (found_vin or 'unknown', info['taken']))
+            with open(path, 'w', encoding='utf-8') as f:
+                json.dump(info, f, indent=2)
+            info['profile'] = path
+            log('Unit profile written to: ' + path)
+        return info
+    finally:
+        try:
+            client.close()
+        except OSError:
+            pass
+
+
 def _open_client(gateway, mgu_ip, vin, log):
     from mgu7 import discovery, hsfz
     found_vin = (vin or '').strip().upper() or None
@@ -429,7 +475,7 @@ def verify(backup, gateway='auto', mgu_ip=None, log=print):
 # ============================================================ CLI
 def main(argv=None):
     ap = argparse.ArgumentParser(description='Bimmhacks MGU coding backup / restore (experimental).')
-    ap.add_argument('action', nargs='?', default='backup', choices=['backup', 'restore', 'verify', 'preflight'])
+    ap.add_argument('action', nargs='?', default='backup', choices=['backup', 'restore', 'verify', 'preflight', 'identity'])
     ap.add_argument('--out', help='backup: folder to write the backup into')
     ap.add_argument('--backup', help='restore / verify: the backup .json to use')
     ap.add_argument('--gateway', default='auto')
@@ -457,6 +503,9 @@ def main(argv=None):
                 ap.error('--out is needed for the read-only preflight backup')
             r = preflight_backup(gateway=a.gateway, mgu_ip=a.mgu_ip, vin=a.vin, out=a.out, log=log)
             return 0 if r.get('verified') else 1
+        if a.action == 'identity':
+            info = read_identity(gateway=a.gateway, mgu_ip=a.mgu_ip, vin=a.vin, out=a.out, log=log)
+            return 0 if info.get('is_supported_mgu') else 3    # 3: read ok, but not the supported BTLD
         if not a.backup:
             ap.error('--backup <file.json> is needed')
         bk = load_backup(a.backup)
