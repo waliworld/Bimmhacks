@@ -31,7 +31,7 @@ it. Stage C (App Store) needs internet at the car (or a prepared USB stick).
 """
 import argparse, hashlib, json, os, queue, re, shutil, stat, subprocess, sys, tempfile, threading, time
 
-VERSION = '1.13.2'
+VERSION = '1.14.0'
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 DEFAULT_IP = '169.254.36.47'                # the unit's address with the idrive7-8-ssh-root tool
@@ -800,14 +800,14 @@ def do_beem(action, ssh, ip, key, log=print, **opts):
             log('join that network from the phone - or join the car to your phone\'s hotspot instead.')
         if action == 'install':
             why = []
-            if 'Read-only file system' in out or 'read-only /etc' in out:
-                why.append('/etc is read-only on this unit, so the boot service could not be written. The helper '
-                           'was started detached instead: it will NOT come back after a head-unit restart.')
+            if ('read-only /etc' in out or '/etc is read-only' in out
+                    or 'NOT started at boot' in out):
+                why.append('/etc is read-only on this unit, so no boot service could be written. The helper '
+                           'runs now (transient or background) but will NOT start again after a head-unit '
+                           'restart - re-run this install after one.')
             if 'NOT answering' in out:
-                why.append('The helper started but did not answer on /run/beem-bridge/bridge.sock. Press '
-                           '"Bridge log" to read its own log - that says why (a read-only /run, or a crash). '
-                           'Note the check only probes the /run socket, so a daemon that fell back to '
-                           '/dev/shm can look dead while it is alive.')
+                why.append('The helper started but did not answer on its control socket. Press "Bridge log" '
+                           'to read its own log - that says why.')
             if code:
                 raise InstallerError('The bridge helper install did not finish (exit %d).%s'
                                      % (code, ('\n- ' + '\n- '.join(why)) if why

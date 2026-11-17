@@ -67,8 +67,8 @@ This project bundles three upstream repositories, each copied unchanged except w
 ## 6. `tools/beem-flash/` — the BeeM-Flash wireless bridge helper
 
 - **Repository:** https://github.com/waliworld/BeeM-Flash
-- **Commit:** `7f8bc99` (v2.28.0 — the helper rebuilt around the app's own listener, with the full
-  `INSTALL.md`). Was `3d09482`.
+- **Commit:** `bc83a1e` (v2.29.0 — "helper installs on this head unit"). Was `7f8bc99` (v2.28.0), and
+  `3d09482` before that.
 - **Licence:** MIT (TunedByWali) — `tools/beem-flash/LICENSE`, with `NOTICE.md`.
 - Only the bridge tooling is vendored, not the full BeeM-Flash app: `beem-bridge/` (the root daemon
   `beem-bridged.js`, its systemd unit, `install.sh` / `uninstall.sh`, `INSTALL.md`, `README.md`),
@@ -77,13 +77,16 @@ This project bundles three upstream repositories, each copied unchanged except w
   `--probe` (capability), install (with `--app-uid` / `--open-iface` / `--channel` / `--take-iface` /
   `--no-systemd`), `--status`, uninstall, and the car probe. install.sh options are validated before they
   reach the remote shell (`_beem_install_args`).
-- **Local patch (not yet upstream):** `beem-bridge/install.sh`'s detached fallback called `setsid`
-  unconditionally. On a real MGU (2023 X3, read-only `/etc`) busybox had no `setsid`, so the fallback
-  printed `setsid: not found`, recorded a pid for the dead subshell and left **no daemon running** — the
-  install then failed with only "is NOT answering". Our copy probes `setsid`, falls back to `nohup`, then
-  to a plain background start with `trap '' HUP`, and checks the process actually stayed up. Push this
-  upstream and drop the patch on the next re-vendor. (`installer/tests/test_bridge.py` runs the shipped
-  `start_detached()` with both tools absent.)
+- **The `setsid` bug is fixed upstream (v2.29.0), so we carry no local patch.** We found it from a real
+  car (2023 X3, read-only `/etc`): `install.sh`'s detached fallback called `setsid` unconditionally, the
+  unit's busybox had none, so the helper never started while a pid was still recorded and the install only
+  said "is NOT answering". Upstream now starts in three tiers — a boot service in `/etc/systemd/system`
+  (only when `/etc` is writable), else a **`systemd-run` transient unit** (supervised, `Restart=always`,
+  no write to `/etc`, but gone after a restart), else `nohup` / plain background — and it reports a
+  `boot:` line saying whether it will come back. Two other gaps we flagged are fixed in the same release:
+  `--status` now tries **every** socket path (a daemon that could only create `/dev/shm` used to look
+  dead), and the daemon **ignores `SIGHUP`** so a background start survives the SSH session. The probe
+  also now reads the iptables/nft INPUT policy, which is what decides whether `--open-iface` is needed.
 - The bridge is **OFF by default**: the helper never talks to the car (the app does, every request
   approved on the car's screen), and it broadcasts nothing until the owner turns on WI-FI: OWN from the
   app. The installer only deploys the helper and runs its probes. Everything here is for the owner's own

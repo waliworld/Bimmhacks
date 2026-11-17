@@ -76,6 +76,7 @@ It prints what this head unit can do. Look for these lines:
 | `tool iw:` / `tool ip:` | `present` | Required. |
 | `tool iptables:` | `present` | Needed only if a firewall blocks the ports. |
 | `wireless (iw dev):` | your interfaces and their channel | Note the channel: the helper uses the same one. |
+| `firewall (read-only):` | `iptables INPUT policy: ACCEPT`, no DROP/REJECT for `wlan…` | A DROP policy or rules on `wlan_bridge` mean the firewall blocks tools on the car's Wi-Fi. Install with `--open-iface wlan_bridge` (§5). |
 
 **Send me a photo of this output if anything is MISSING or NO.**
 
@@ -106,8 +107,13 @@ The installer:
 1. stops any earlier copy;
 2. copies the helper to `/var/opt/beem-bridge/`;
 3. checks that the helper loads under the head unit's own Node;
-4. installs it as a **systemd service that starts at every boot** (if `/etc` is
-   read-only it falls back to a detached start and says so);
+4. starts it, using the best option this head unit allows:
+   * `/etc` writable → a **systemd service that starts at every boot**;
+   * `/etc` **read-only** (seen on the test car) → a **transient systemd service**
+     (`systemd-run`): supervised and restarted if it stops, but **not started at boot**.
+     Run `sh install.sh` again after a head-unit restart.
+   * no systemd → a background start (works without `setsid` / `nohup`, and survives
+     the SSH session closing);
 5. **checks the helper answers** on its control socket, and says clearly if not.
 
 You should see `beem-bridged is installed and answering (systemd).`
@@ -174,7 +180,7 @@ journalctl -u beem-bridged -e     # its log (systemd install)
 
 ---
 
-## 8. If the head unit can't host a network
+## 8. If the head unit can't host a network (the test car: no `hostapd`, no `iw`)
 
 If the probe shows `AP mode supported: NO` or `hostapd: MISSING`, the helper can't
 create a network on this unit. The bridge still works on any network the car is
@@ -184,7 +190,20 @@ already on:
   `172.20.10.x`) on the bridge page; point the tool there.
 * **Car's own Wi-Fi with its firewall opened**:
   `sh install.sh --open-iface wlan_bridge`, then the phone on the car's Wi-Fi uses
-  the `172.16.222.97` address shown.
+  the `172.16.222.97` address shown. The helper keeps those ports open while it runs
+  and removes the rules when it stops.
+
+Either way, open **CONNECT → WIRELESS BRIDGE** while the tool tries to connect. The
+**TOOL ACTIVITY** list shows exactly what reached the car:
+
+| TOOL ACTIVITY shows | Meaning |
+|---|---|
+| nothing at all | The tool's packets never reached the head unit: wrong network, Wi-Fi client isolation, or a firewall. |
+| `UDP 6811 HSFZ ident from … → answered` only | The tool found the car but never connected. Note which port it should have used. |
+| `TCP 6801 connect …` then `closed … after 0 frames` | Connected but sent nothing we recognised; the first bytes are shown. |
+| `request 0x22 → ECU 0x10: refused (…)` | It got through; the reason is shown. FULL GW may be needed. |
+
+**Send me a photo of that list** after a tool attempt: it shows exactly where to look next.
 
 ---
 

@@ -135,7 +135,7 @@ class BridgeDeploy(unittest.TestCase):
             self.run_beem('install')
         msg = str(e.exception)
         self.assertIn('/etc is read-only', msg)
-        self.assertIn('NOT come back after a head-unit restart', msg)
+        self.assertIn('NOT start again after a head-unit restart', msg)
         self.assertIn('Bridge log', msg)
 
     def test_a_probe_without_hostapd_says_the_unit_cannot_host_an_ap(self):
@@ -194,8 +194,9 @@ class BridgeAccessCode(unittest.TestCase):
 
 
 class InstallScript(unittest.TestCase):
-    """The on-car install.sh must not assume setsid. On a real MGU with a read-only /etc it fell back to a
-    detached start, busybox had no setsid, and the daemon never ran at all while a pid was still recorded."""
+    """The on-car install.sh must never assume setsid. On a real MGU with a read-only /etc it fell back to a
+    detached start, busybox had no setsid, and the daemon never ran at all while a pid was still recorded.
+    Fixed upstream in BeeM-Flash v2.29.0: systemd unit -> systemd-run transient -> nohup/background."""
 
     INSTALL = os.path.join(bi.BEEM_DIR, 'beem-bridge', 'install.sh')
 
@@ -203,25 +204,27 @@ class InstallScript(unittest.TestCase):
         r = subprocess.run(['/bin/sh', '-n', self.INSTALL], stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         self.assertEqual(r.returncode, 0, r.stdout.decode())
 
-    def test_setsid_is_probed_not_assumed(self):
+    def test_setsid_is_never_assumed(self):
         with open(self.INSTALL) as f:
             src = f.read()
-        self.assertIn('command -v setsid', src, 'setsid must be probed before use')
+        # the original bug: a bare `setsid ...` line on a busybox unit that has none
+        self.assertIsNone(re.search(r'^\s*setsid\s', src, re.M), 'setsid must never be called unguarded')
         self.assertIn('command -v nohup', src, 'needs a nohup fallback for units without setsid')
+        self.assertIn('systemd-run', src, 'needs the transient-unit tier for a read-only /etc')
 
     def test_detach_still_starts_the_daemon_without_setsid_or_nohup(self):
         # run the SHIPPED start_detached() with an empty PATH, so neither setsid nor nohup exists
         with open(self.INSTALL) as f:
             src = f.read()
-        m = re.search(r'^start_detached\(\)\s*\{.*?^\}', src, re.S | re.M)
-        self.assertIsNotNone(m, 'start_detached() not found in install.sh')
+        m = re.search(r'^if \[ -z "\$STARTED" \]; then\n.*?^fi$', src, re.S | re.M)
+        self.assertIsNotNone(m, 'the background-start block was not found in install.sh')
         d = tempfile.mkdtemp(prefix='detach-')
         self.addCleanup(shutil.rmtree, d, True)
         fake_node = os.path.join(d, 'node')
         with open(fake_node, 'w') as f:
             f.write('#!/bin/sh\nsleep 30\n')
         os.chmod(fake_node, 0o755)
-        script = 'NODE=%s\nDIR=%s\nARGS=""\n%s\nstart_detached\n' % (fake_node, d, m.group(0))
+        script = 'NODE=%s\nDIR=%s\nARGS=""\nSTARTED=""\n%s\n' % (fake_node, d, m.group(0))
         r = subprocess.run(['/bin/sh', '-c', script], env={'PATH': ''},
                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         self.assertEqual(r.returncode, 0, r.stdout.decode())

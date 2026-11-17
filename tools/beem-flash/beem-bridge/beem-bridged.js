@@ -478,6 +478,24 @@ function probe() {
   log('interface combinations:  ' + (cap.combos || 'not reported'));
   log('  -> a separate AP next to the car\'s Wi-Fi needs a combination that allows AP alongside the current mode(s)');
   ['hostapd', 'dnsmasq', 'iw', 'ip', 'iptables', 'nft'].forEach(function (b) { log('tool ' + b + ': ' + (has(b) ? 'present' : 'MISSING')); });
+  // Firewall, read-only: does the unit drop inbound traffic on its Wi-Fi? If so,
+  // a tool's discovery (UDP 6811/13400) and connection (TCP 6801/13400) never
+  // reach the app, and --open-iface <wifi iface> is the fix.
+  log('firewall (read-only):');
+  var ipt = sh('iptables -S INPUT 2>/dev/null');
+  if (ipt.ok) {
+    var lines = ipt.out.split('\n').filter(Boolean);
+    var pol = lines.filter(function (l) { return /^-P INPUT/.test(l); })[0] || '-P INPUT ?';
+    log('   iptables INPUT policy: ' + pol.replace('-P INPUT ', '') + '   (' + (lines.length - 1) + ' rules)');
+    lines.filter(function (l) { return /wlan|6801|6811|13400|REJECT|DROP/.test(l); }).slice(0, 12)
+      .forEach(function (l) { log('     ' + l); });
+  } else log('   iptables: not readable');
+  var nft = sh('nft list ruleset 2>/dev/null');
+  if (nft.ok && nft.out.trim()) {
+    var hooks = nft.out.split('\n').filter(function (l) { return /hook input|policy drop|wlan|6801|6811|13400/.test(l); });
+    log('   nftables: ' + (hooks.length ? '' : 'no input hook / drop policy / wlan rules found'));
+    hooks.slice(0, 12).forEach(function (l) { log('     ' + l.trim()); });
+  } else log('   nftables: empty or not readable');
   var other = sh('pgrep -a hostapd 2>/dev/null');
   log('hostapd already running: ' + (other.ok && other.out.trim() ? other.out.trim().replace(/\n/g, ' | ') : 'no'));
   log('node: ' + process.version + '   socket(s): ' + OPT.socks.join(', '));
@@ -486,13 +504,23 @@ function probe() {
   log('network; the app\'s bridge still works on any network the car is already on.');
 }
 function askStatus() {
-  var c = net.connect(OPT.socks[0]), buf = '';
-  c.on('connect', function () { c.write(JSON.stringify({ id: 's1', cmd: 'status' }) + '\n'); });
-  c.on('data', function (d) {
-    buf += String(d);
-    if (buf.indexOf('\n') >= 0) { process.stdout.write(JSON.stringify(JSON.parse(buf.split('\n')[0]), null, 2) + '\n'); c.destroy(); }
-  });
-  c.on('error', function (e) { log('daemon not reachable on ' + OPT.socks[0] + ': ' + e.message); process.exit(1); });
+  // Try every socket path: a daemon that could only create /dev/shm still answers.
+  var paths = OPT.socks.slice(0), errs = [];
+  function next() {
+    if (!paths.length) { log('daemon not reachable: ' + errs.join('; ')); process.exit(1); return; }
+    var p = paths.shift(), c = net.connect(p), buf = '', done = false;
+    c.on('connect', function () { c.write(JSON.stringify({ id: 's1', cmd: 'status' }) + '\n'); });
+    c.on('data', function (d) {
+      buf += String(d);
+      if (!done && buf.indexOf('\n') >= 0) {
+        done = true;
+        var m = JSON.parse(buf.split('\n')[0]); m.socket = p;
+        process.stdout.write(JSON.stringify(m, null, 2) + '\n'); c.destroy(); process.exit(0);
+      }
+    });
+    c.on('error', function (e) { if (done) return; done = true; errs.push(p + ': ' + (e.code || e.message)); next(); });
+  }
+  next();
 }
 
 // ---- main ------------------------------------------------------------------
@@ -538,7 +566,10 @@ function main() {
     if (Date.now() - Math.max(lastJoined, AP.since) > OPT.idleSec * 1000) { log('nobody joined for ' + OPT.idleSec + ' s - taking the network down'); apStop(); }
   }, 15000);
 
-  ['SIGINT', 'SIGTERM', 'SIGHUP'].forEach(function (sig) { process.on(sig, function () { log('signal ' + sig); shutdown(0); }); });
+  ['SIGINT', 'SIGTERM'].forEach(function (sig) { process.on(sig, function () { log('signal ' + sig); shutdown(0); }); });
+  // SIGHUP arrives when the shell that started us closes (no setsid / nohup on
+  // BusyBox units). Ignore it so a background start survives the SSH session.
+  process.on('SIGHUP', function () { log('SIGHUP ignored'); });
   process.on('uncaughtException', function (e) { log('fatal: ' + ((e && e.stack) || e)); shutdown(1); });
 }
 

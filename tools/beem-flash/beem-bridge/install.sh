@@ -62,7 +62,9 @@ ARGS="--uid $APP_UID"
 command -v systemctl >/dev/null 2>&1 || USE_SYSTEMD=0
 
 # 1) stop any earlier copy (either kind) so only one runs
-if command -v systemctl >/dev/null 2>&1; then systemctl stop beem-bridged.service 2>/dev/null; fi
+if command -v systemctl >/dev/null 2>&1; then
+  systemctl stop beem-bridged.service 2>/dev/null; systemctl reset-failed beem-bridged.service 2>/dev/null
+fi
 if [ -f "$DIR/bridge.pid" ]; then
   P="$(cat "$DIR/bridge.pid")"; kill "$P" 2>/dev/null
   i=0; while kill -0 "$P" 2>/dev/null && [ $i -lt 15 ]; do sleep 1; i=$((i+1)); done
@@ -75,44 +77,43 @@ cp "$SELF_DIR/beem-bridged.js" "$DIR/beem-bridged.js" || die "cannot copy beem-b
 chmod 0755 "$DIR/beem-bridged.js"
 "$NODE" -e "require('$DIR/beem-bridged.js')" || die "the helper does not load under $NODE"
 
-# 3) start (systemd if possible, detached otherwise)
-STARTED=""
-if [ "$USE_SYSTEMD" = "1" ]; then
+# 3) start. In order of preference:
+#    a) a boot service in /etc/systemd/system  (only if /etc is writable)
+#    b) a transient systemd unit (systemd-run): supervised and restarted on
+#       failure, needs no write to /etc - but does not survive a head-unit restart
+#    c) nohup / plain background start (no supervision)
+# Head units with a read-only /etc and no setsid (BusyBox) used to end up with
+# nothing running at all; every path below is checked.
+STARTED="" BOOT=""
+if [ "$USE_SYSTEMD" = "1" ] && [ -w "$(dirname "$UNIT")" ]; then
   if sed -e "s|__NODE__|$NODE|g" -e "s|__ARGS__|$ARGS|g" "$SELF_DIR/beem-bridged.service" > "$UNIT" 2>/dev/null; then
     systemctl daemon-reload || die "systemctl daemon-reload failed"
-    systemctl enable beem-bridged.service >/dev/null 2>&1 || echo "warning: could not enable at boot"
+    systemctl enable beem-bridged.service >/dev/null 2>&1 && BOOT=1 || echo "warning: could not enable at boot"
     systemctl restart beem-bridged.service || die "the service did not start: journalctl -u beem-bridged -e"
     STARTED=systemd
-  else
-    echo "warning: cannot write $UNIT (read-only /etc?) - starting detached instead"
   fi
 fi
-# Detach WITHOUT assuming setsid: a head unit's busybox may ship neither setsid nor
-# nohup, and a bare "setsid: not found" left no daemon running at all while the
-# install still reported a pid (seen on an MGU with a read-only /etc).
-start_detached() {
-  if command -v setsid >/dev/null 2>&1; then
-    # shellcheck disable=SC2086
-    setsid "$NODE" "$DIR/beem-bridged.js" $ARGS >"$DIR/bridge.log" 2>&1 &
-  elif command -v nohup >/dev/null 2>&1; then
-    # shellcheck disable=SC2086
-    nohup "$NODE" "$DIR/beem-bridged.js" $ARGS >"$DIR/bridge.log" 2>&1 &
+if [ -z "$STARTED" ] && [ "$USE_SYSTEMD" = "1" ] && command -v systemd-run >/dev/null 2>&1; then
+  [ -w "$(dirname "$UNIT")" ] || echo "note: /etc is read-only on this unit - starting a transient service instead (until the next restart)"
+  systemctl stop beem-bridged.service 2>/dev/null; systemctl reset-failed beem-bridged.service 2>/dev/null
+  # shellcheck disable=SC2086
+  if systemd-run --unit=beem-bridged -p Restart=always -p RestartSec=5 "$NODE" "$DIR/beem-bridged.js" $ARGS >/dev/null 2>&1; then
+    STARTED=transient
   else
-    trap '' HUP                     # last resort: survive the ssh session closing
+    echo "warning: systemd-run failed - starting it in the background instead"
+  fi
+fi
+if [ -z "$STARTED" ]; then
+  # The helper ignores SIGHUP, so closing this shell does not stop it.
+  if command -v nohup >/dev/null 2>&1; then
     # shellcheck disable=SC2086
-    "$NODE" "$DIR/beem-bridged.js" $ARGS >"$DIR/bridge.log" 2>&1 &
+    nohup "$NODE" "$DIR/beem-bridged.js" $ARGS </dev/null >"$DIR/bridge.log" 2>&1 &
+  else
+    # shellcheck disable=SC2086
+    "$NODE" "$DIR/beem-bridged.js" $ARGS </dev/null >"$DIR/bridge.log" 2>&1 &
   fi
   echo $! > "$DIR/bridge.pid"
-}
-
-if [ -z "$STARTED" ]; then
-  start_detached
-  sleep 1
-  BGPID="$(cat "$DIR/bridge.pid" 2>/dev/null)"
-  if [ -z "$BGPID" ] || ! kill -0 "$BGPID" 2>/dev/null; then
-    echo "warning: the detached helper did not stay up - see $DIR/bridge.log"
-  fi
-  STARTED=detached
+  STARTED=background
 fi
 
 # 4) verify the helper answers on its control socket
@@ -126,15 +127,29 @@ echo "=================================================================="
 if [ -n "$OK" ]; then
   echo " beem-bridged is installed and answering ($STARTED)."
 else
-  echo " beem-bridged was installed but is NOT answering yet."
-  [ "$STARTED" = "systemd" ] && echo " check: journalctl -u beem-bridged -e" || echo " check: $DIR/bridge.log"
+  echo " beem-bridged was started ($STARTED) but is NOT answering yet."
+fi
+case "$STARTED" in
+  systemd)   echo " log    : journalctl -u beem-bridged -e" ;;
+  transient) echo " log    : journalctl -u beem-bridged -e" ;;
+  *)         echo " log    : $DIR/bridge.log" ;;
+esac
+if [ -n "$BOOT" ]; then
+  echo " boot   : starts at every head-unit start"
+else
+  echo " boot   : NOT started at boot on this unit (read-only /etc) - run 'sh install.sh' again after a restart"
 fi
 echo " status : sh install.sh --status"
-[ "$STARTED" = "systemd" ] && echo " log    : journalctl -u beem-bridged -e   (starts at every boot)" \
-                          || echo " log    : $DIR/bridge.log   (detached: does NOT start at boot)"
 echo " remove : sh uninstall.sh"
 echo "=================================================================="
+# What the helper can actually do on THIS unit
+if ! command -v hostapd >/dev/null 2>&1 || ! command -v iw >/dev/null 2>&1; then
+  echo
+  echo "NOTE: this head unit has no hostapd/iw, so it cannot host its own Wi-Fi network:"
+  echo "      WI-FI: OWN will report that. The helper is only useful here to open the"
+  echo "      firewall on the car's own Wi-Fi:  sh install.sh --open-iface wlan_bridge"
+  [ -n "$OPEN_IFACE" ] && echo "      (done: opened on $OPEN_IFACE)"
+fi
 echo
-echo "NEXT, on the car: BeeM-Flash > CONNECT > WIRELESS BRIDGE > BRIDGE: ON, then WI-FI: OWN."
-echo "Join the network shown on the phone, and point the tool at the address and port shown."
+echo "NEXT, on the car: BeeM-Flash > CONNECT > WIRELESS BRIDGE > BRIDGE: ON."
 [ -n "$OK" ] || exit 1

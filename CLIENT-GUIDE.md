@@ -198,8 +198,10 @@ Steps:
 > Wi-Fi interface (usually `wlan_bridge`), then join that network from the phone and use the address the
 > car shows; or join the car to your phone's hotspot instead.
 
-> **If `/etc` is read-only** the boot service cannot be written, so the helper is started *detached*: it
-> works now, but it does **not** come back after a head-unit restart — re-run the install after a restart.
+> **If `/etc` is read-only** the boot service cannot be written. The helper still starts — as a
+> *transient* supervised service where the unit has `systemd-run`, otherwise in the background — and the
+> install prints a **`boot:`** line telling you which. In that case it does **not** come back after a
+> head-unit restart: re-run the install after one.
 
 The **Install guide** button opens the full step-by-step (`tools/beem-flash/beem-bridge/INSTALL.md`), and
 **Bridge design & status** opens the design notes. **Developer probes → Car probe** is read-only: it maps
