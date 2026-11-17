@@ -31,7 +31,7 @@ it. Stage C (App Store) needs internet at the car (or a prepared USB stick).
 """
 import argparse, hashlib, json, os, queue, re, shutil, stat, subprocess, sys, tempfile, threading, time
 
-VERSION = '1.13.0'
+VERSION = '1.13.1'
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 DEFAULT_IP = '169.254.36.47'                # the unit's address with the idrive7-8-ssh-root tool
@@ -706,6 +706,19 @@ def do_store_install(node, ip, key, no_renderer=False, no_uplink=False, log=prin
 BEEM_REMOTE = '/var/opt/bimmhacks-beem'        # where the files are staged on the unit before install.sh
 BRIDGE_DEFAULT_UID = '12261'                   # the BeeM-Flash app's default uid (car: SETUP > DIAG > P8)
 BEEM_BRIDGE_FILES = ['beem-bridged.js', 'beem-bridged.service', 'install.sh']
+# Read-only diagnostic for a helper that installed but does not answer. Busybox-safe (the unit's shell is
+# not bash): the daemon's own log, whether its process is alive, which control sockets exist, and whether
+# /run is writable at all - a read-only /run is why the /run socket can be missing while the daemon lives.
+BEEM_LOG_CMD = (
+    'echo "== bridge.log (last 120 lines) =="; tail -n 120 /var/opt/beem-bridge/bridge.log 2>/dev/null '
+    '|| echo "(no /var/opt/beem-bridge/bridge.log)"; '
+    'echo; echo "== recorded pid =="; cat /var/opt/beem-bridge/bridge.pid 2>/dev/null || echo "(none)"; '
+    'echo "== beem-bridged processes =="; ps 2>/dev/null | grep beem-bridged | grep -v grep || echo "(not running)"; '
+    'echo "== control sockets =="; ls -l /run/beem-bridge/ 2>&1; ls -l /dev/shm/beem-bridge/ 2>&1; '
+    'echo "== is /run writable? =="; '
+    '(touch /run/.beem-wtest 2>/dev/null && echo "/run is writable" && rm -f /run/.beem-wtest) '
+    '|| echo "/run is NOT writable - the daemon cannot create its /run socket"; '
+    'echo "== systemd unit =="; ls -l /etc/systemd/system/beem-bridged.service 2>&1')
 
 # action -> (subdir under tools/beem-flash, files to copy, base command, intro line)
 BEEM_JOBS = {
@@ -715,6 +728,10 @@ BEEM_JOBS = {
                   'Installing the BeeM-Flash bridge helper (root service; starts at boot, verifies it answers) ...'),
     'status':    ('beem-bridge', ['install.sh'], 'sh install.sh --status',
                   'Asking the running bridge helper for its state ...'),
+    # read-only: the daemon's own log + whether it is alive and which sockets exist. This is what says
+    # WHY a detached helper did not answer (install.sh only ever probes the /run socket).
+    'log':       ('beem-bridge', [], BEEM_LOG_CMD,
+                  'Reading the bridge helper log and runtime state (read-only) ...'),
     'uninstall': ('beem-bridge', ['uninstall.sh'], 'sh uninstall.sh',
                   'Removing the BeeM-Flash bridge helper and stopping its access point ...'),
     'car-probe': ('bridge-probes', ['probe-car.sh'], 'sh probe-car.sh',
@@ -773,8 +790,30 @@ def do_beem(action, ssh, ip, key, log=print, **opts):
             if code:
                 raise InstallerError('Could not copy %s to the head unit (exit %d).' % (f, code))
         code, out = car.run('cd %s && %s' % (remote, cmd))
-        if code and action == 'install':
-            raise InstallerError('The bridge helper install failed (exit %d; see above).' % code)
+        if action == 'probe' and ('hostapd: MISSING' in out or 'AP mode supported:       NO' in out
+                                  or 'iw: MISSING' in out):
+            log('')
+            log('NOTE: this head unit cannot host its OWN Wi-Fi network - hostapd / iw are missing (or the')
+            log('radio has no AP mode). "WI-FI: OWN" will not come up on this car, however the helper is')
+            log('installed. The bridge still works on a network the car is ALREADY on: install with the')
+            log('"open car-Wi-Fi iface" field set to the car\'s Wi-Fi interface (wlan_bridge above), then')
+            log('join that network from the phone - or join the car to your phone\'s hotspot instead.')
+        if action == 'install':
+            why = []
+            if 'Read-only file system' in out or 'read-only /etc' in out:
+                why.append('/etc is read-only on this unit, so the boot service could not be written. The helper '
+                           'was started detached instead: it will NOT come back after a head-unit restart.')
+            if 'NOT answering' in out:
+                why.append('The helper started but did not answer on /run/beem-bridge/bridge.sock. Press '
+                           '"Bridge log" to read its own log - that says why (a read-only /run, or a crash). '
+                           'Note the check only probes the /run socket, so a daemon that fell back to '
+                           '/dev/shm can look dead while it is alive.')
+            if code:
+                raise InstallerError('The bridge helper install did not finish (exit %d).%s'
+                                     % (code, ('\n- ' + '\n- '.join(why)) if why
+                                        else ' See the log above.'))
+            for w in why:
+                log('NOTE: ' + w)
         return code, out
     finally:
         car.close()
@@ -1690,7 +1729,10 @@ def run_gui():
                 'it on from the app. Experimental; your own vehicle.'), style='Accent.TButton')
     br2 = row(c4, pady=(0, 4))
     button(br2, 'Status', lambda: on_bridge('status', 'Bridge helper status - see the activity log.'))
-    button(br2, 'Remove bridge helper', lambda: on_bridge(
+    button(br2, 'Bridge log', lambda: on_bridge(
+        'log', 'Bridge helper log read - see the activity log for why it did not answer.'))
+    br2b = row(c4, pady=(0, 4))
+    button(br2b, 'Remove bridge helper', lambda: on_bridge(
         'uninstall', 'Bridge helper removed and the access point stopped.',
         confirm='Remove the BeeM-Flash bridge helper from the car at %s and stop its access point?'),
         style='Danger.TButton')
@@ -1835,7 +1877,7 @@ def main(argv=None):
                              'detect-vin', 'base-identity', 'base-root',
                              'backup-coding', 'preflight-coding', 'verify-coding', 'restore-coding',
                              'test', 'store-install', 'restart-head-unit',
-                             'bridge-probe', 'bridge-install', 'bridge-status', 'bridge-uninstall', 'bridge-car-probe',
+                             'bridge-probe', 'bridge-install', 'bridge-status', 'bridge-log', 'bridge-uninstall', 'bridge-car-probe',
                              'bridge-set-code',
                              'install-ridetube', 'install-idrive-apps', 'install-car-apps', 'install-our-apps',
                              'usb-repo', 'pid-capture'])
@@ -1945,10 +1987,10 @@ def main(argv=None):
             do_restart_head_unit(a.ip or ip_from_key(a.key) or DEFAULT_IP, a.key, log=log, wait=not a.no_wait)
             log('The head unit restarted.' if not a.no_wait else 'Restart requested.')
             return
-        if a.action in ('bridge-probe', 'bridge-install', 'bridge-status', 'bridge-uninstall', 'bridge-car-probe'):
+        if a.action in ('bridge-probe', 'bridge-install', 'bridge-status', 'bridge-log', 'bridge-uninstall', 'bridge-car-probe'):
             if not a.key:
                 ap.error('--key is needed (do the root-access step first)')
-            beem_action = {'bridge-probe': 'probe', 'bridge-install': 'install', 'bridge-status': 'status',
+            beem_action = {'bridge-probe': 'probe', 'bridge-install': 'install', 'bridge-status': 'status', 'bridge-log': 'log',
                            'bridge-uninstall': 'uninstall', 'bridge-car-probe': 'car-probe'}[a.action]
             opts = dict(app_uid=a.app_uid, open_iface=a.open_iface, channel=a.channel,
                         take_iface=a.take_iface, no_systemd=a.no_systemd) if beem_action == 'install' else {}

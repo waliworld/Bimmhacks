@@ -27,7 +27,18 @@ case "$cmd" in
     "echo CONNECTED"*) printf 'CONNECTED\\n0\\nMGU_OAP_OK\\n' ;;
     "mkdir -p "*) d=${cmd#mkdir -p }; mkdir -p "$SANDBOX$d" ;;
     "cat > "*) f=${cmd#cat > }; mkdir -p "$(dirname "$SANDBOX$f")"; cat > "$SANDBOX$f" ;;
-    *) printf 'RAN %s\\n' "$cmd" ;;
+    *)
+        if [ -n "${FAIL_INSTALL:-}" ]; then
+            echo "install.sh: line 89: can't create /etc/systemd/system/beem-bridged.service: Read-only file system"
+            echo "warning: cannot write /etc/systemd/system/beem-bridged.service (read-only /etc?) - starting detached instead"
+            echo " beem-bridged was installed but is NOT answering yet."
+            exit 1
+        fi
+        if [ -n "${NO_AP:-}" ]; then
+            echo "tool hostapd: MISSING"
+            echo "tool iw: MISSING"
+        fi
+        printf 'RAN %s\\n' "$cmd" ;;
 esac
 exit 0
 '''
@@ -103,6 +114,35 @@ class BridgeDeploy(unittest.TestCase):
         # status is read-only: it never pushes the daemon or runs a bare install
         self.assertFalse(any(c.endswith('beem-bridged.js') for c in cmds if c.startswith('cat >')))
         self.assertFalse(any(c.endswith('&& sh install.sh') for c in cmds))
+
+    def test_log_is_read_only_and_copies_nothing(self):
+        code, cmds, _ = self.run_beem('log')
+        self.assertEqual(code, 0)
+        self.assertFalse(any(c.startswith('cat >') for c in cmds), 'the log action must copy no files')
+        last = cmds[-1]
+        for expect in ('bridge.log', 'beem-bridged processes', 'control sockets', 'is /run writable'):
+            self.assertIn(expect, last, 'the log diagnostic is missing %r' % expect)
+        self.assertNotIn('install.sh', last)
+        self.assertNotIn('uninstall.sh', last)
+
+    def test_a_failed_install_explains_readonly_etc_and_points_at_the_log(self):
+        # replays the real failure seen on a car: read-only /etc, helper not answering
+        os.environ['FAIL_INSTALL'] = '1'
+        self.addCleanup(os.environ.pop, 'FAIL_INSTALL', None)
+        with self.assertRaises(bi.InstallerError) as e:
+            self.run_beem('install')
+        msg = str(e.exception)
+        self.assertIn('/etc is read-only', msg)
+        self.assertIn('NOT come back after a head-unit restart', msg)
+        self.assertIn('Bridge log', msg)
+
+    def test_a_probe_without_hostapd_says_the_unit_cannot_host_an_ap(self):
+        os.environ['NO_AP'] = '1'
+        self.addCleanup(os.environ.pop, 'NO_AP', None)
+        _, _, lines = self.run_beem('probe')
+        text = '\n'.join(lines)
+        self.assertIn('cannot host its OWN Wi-Fi network', text)
+        self.assertIn('open car-Wi-Fi iface', text)
 
     def test_uninstall_only_sends_uninstall(self):
         code, cmds, _ = self.run_beem('uninstall')

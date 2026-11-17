@@ -186,8 +186,20 @@ Steps:
    **WI-FI: OWN**. The screen shows a network name, password and the tool address (`192.168.44.1`, ports
    `13400` / `6801`). Join it from the phone and point your tool there.
 5. **Status** — asks the running helper for its live state (network, devices, errors).
-6. **Remove bridge helper** — stops the service and removes it; the network goes down. The car's own Wi-Fi
+6. **Bridge log** — read-only. Shows the helper's own log, whether its process is alive, which control
+   sockets exist and whether `/run` is writable. **This is what to press when an install says the helper
+   "is NOT answering".**
+7. **Remove bridge helper** — stops the service and removes it; the network goes down. The car's own Wi-Fi
    is untouched.
+
+> **If the probe says `hostapd: MISSING` or `iw: MISSING`** (or AP mode NO), this head unit **cannot host
+> its own Wi-Fi network** — "WI-FI: OWN" will not come up on it, no matter what. The bridge still works on
+> a network the car is **already** on: install with the **open car-Wi-Fi iface** field set to the car's
+> Wi-Fi interface (usually `wlan_bridge`), then join that network from the phone and use the address the
+> car shows; or join the car to your phone's hotspot instead.
+
+> **If `/etc` is read-only** the boot service cannot be written, so the helper is started *detached*: it
+> works now, but it does **not** come back after a head-unit restart — re-run the install after a restart.
 
 The **Install guide** button opens the full step-by-step (`tools/beem-flash/beem-bridge/INSTALL.md`), and
 **Bridge design & status** opens the design notes. **Developer probes → Car probe** is read-only: it maps
