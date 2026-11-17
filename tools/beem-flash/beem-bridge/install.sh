@@ -87,10 +87,31 @@ if [ "$USE_SYSTEMD" = "1" ]; then
     echo "warning: cannot write $UNIT (read-only /etc?) - starting detached instead"
   fi
 fi
-if [ -z "$STARTED" ]; then
-  # shellcheck disable=SC2086
-  setsid "$NODE" "$DIR/beem-bridged.js" $ARGS >"$DIR/bridge.log" 2>&1 &
+# Detach WITHOUT assuming setsid: a head unit's busybox may ship neither setsid nor
+# nohup, and a bare "setsid: not found" left no daemon running at all while the
+# install still reported a pid (seen on an MGU with a read-only /etc).
+start_detached() {
+  if command -v setsid >/dev/null 2>&1; then
+    # shellcheck disable=SC2086
+    setsid "$NODE" "$DIR/beem-bridged.js" $ARGS >"$DIR/bridge.log" 2>&1 &
+  elif command -v nohup >/dev/null 2>&1; then
+    # shellcheck disable=SC2086
+    nohup "$NODE" "$DIR/beem-bridged.js" $ARGS >"$DIR/bridge.log" 2>&1 &
+  else
+    trap '' HUP                     # last resort: survive the ssh session closing
+    # shellcheck disable=SC2086
+    "$NODE" "$DIR/beem-bridged.js" $ARGS >"$DIR/bridge.log" 2>&1 &
+  fi
   echo $! > "$DIR/bridge.pid"
+}
+
+if [ -z "$STARTED" ]; then
+  start_detached
+  sleep 1
+  BGPID="$(cat "$DIR/bridge.pid" 2>/dev/null)"
+  if [ -z "$BGPID" ] || ! kill -0 "$BGPID" 2>/dev/null; then
+    echo "warning: the detached helper did not stay up - see $DIR/bridge.log"
+  fi
   STARTED=detached
 fi
 

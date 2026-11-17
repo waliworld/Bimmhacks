@@ -77,6 +77,13 @@ This project bundles three upstream repositories, each copied unchanged except w
   `--probe` (capability), install (with `--app-uid` / `--open-iface` / `--channel` / `--take-iface` /
   `--no-systemd`), `--status`, uninstall, and the car probe. install.sh options are validated before they
   reach the remote shell (`_beem_install_args`).
+- **Local patch (not yet upstream):** `beem-bridge/install.sh`'s detached fallback called `setsid`
+  unconditionally. On a real MGU (2023 X3, read-only `/etc`) busybox had no `setsid`, so the fallback
+  printed `setsid: not found`, recorded a pid for the dead subshell and left **no daemon running** — the
+  install then failed with only "is NOT answering". Our copy probes `setsid`, falls back to `nohup`, then
+  to a plain background start with `trap '' HUP`, and checks the process actually stayed up. Push this
+  upstream and drop the patch on the next re-vendor. (`installer/tests/test_bridge.py` runs the shipped
+  `start_detached()` with both tools absent.)
 - The bridge is **OFF by default**: the helper never talks to the car (the app does, every request
   approved on the car's screen), and it broadcasts nothing until the owner turns on WI-FI: OWN from the
   app. The installer only deploys the helper and runs its probes. Everything here is for the owner's own

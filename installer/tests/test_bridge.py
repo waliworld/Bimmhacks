@@ -8,7 +8,9 @@ the installer streams with `cat >`, and records every command. The tests prove d
 bridge files to the unit and runs the right script - the read-only probes never run a destructive command.
 """
 import os
+import re
 import stat
+import subprocess
 import sys
 import tempfile
 import shutil
@@ -189,6 +191,46 @@ class BridgeAccessCode(unittest.TestCase):
         self.assertIsNotNone(m, 'the hash constant must exist')
         # whatever the default code is, the plaintext must not sit next to the hash
         self.assertNotIn('BRIDGE_CODE_PLAIN', src)
+
+
+class InstallScript(unittest.TestCase):
+    """The on-car install.sh must not assume setsid. On a real MGU with a read-only /etc it fell back to a
+    detached start, busybox had no setsid, and the daemon never ran at all while a pid was still recorded."""
+
+    INSTALL = os.path.join(bi.BEEM_DIR, 'beem-bridge', 'install.sh')
+
+    def test_install_script_is_valid_posix_sh(self):
+        r = subprocess.run(['/bin/sh', '-n', self.INSTALL], stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        self.assertEqual(r.returncode, 0, r.stdout.decode())
+
+    def test_setsid_is_probed_not_assumed(self):
+        with open(self.INSTALL) as f:
+            src = f.read()
+        self.assertIn('command -v setsid', src, 'setsid must be probed before use')
+        self.assertIn('command -v nohup', src, 'needs a nohup fallback for units without setsid')
+
+    def test_detach_still_starts_the_daemon_without_setsid_or_nohup(self):
+        # run the SHIPPED start_detached() with an empty PATH, so neither setsid nor nohup exists
+        with open(self.INSTALL) as f:
+            src = f.read()
+        m = re.search(r'^start_detached\(\)\s*\{.*?^\}', src, re.S | re.M)
+        self.assertIsNotNone(m, 'start_detached() not found in install.sh')
+        d = tempfile.mkdtemp(prefix='detach-')
+        self.addCleanup(shutil.rmtree, d, True)
+        fake_node = os.path.join(d, 'node')
+        with open(fake_node, 'w') as f:
+            f.write('#!/bin/sh\nsleep 30\n')
+        os.chmod(fake_node, 0o755)
+        script = 'NODE=%s\nDIR=%s\nARGS=""\n%s\nstart_detached\n' % (fake_node, d, m.group(0))
+        r = subprocess.run(['/bin/sh', '-c', script], env={'PATH': ''},
+                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        self.assertEqual(r.returncode, 0, r.stdout.decode())
+        pidfile = os.path.join(d, 'bridge.pid')
+        self.assertTrue(os.path.isfile(pidfile), 'no pid was recorded')
+        with open(pidfile) as f:
+            pid = int(f.read().strip())
+        self.addCleanup(lambda: os.kill(pid, 9))
+        os.kill(pid, 0)          # raises ProcessLookupError if the daemon never started
 
 
 if __name__ == '__main__':
