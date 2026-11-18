@@ -299,6 +299,8 @@ re-install the Store, run the installer again. Coding backups are kept in `codin
 | *Node.js / OpenSSH missing* | Install Node LTS from nodejs.org; Windows OpenSSH: Settings → Apps → Optional features. |
 | The Store opens on the car but asks you to restart the MGU, and cannot | A fresh Store only starts after a restart, and its own restart button needs it running. In the installer open **App Store** and click **Restart head unit** (about two minutes). Still no luck: switch the ignition off and on, or hold the volume knob for about 30 seconds until the screens restart. |
 | *An install is still running on the head unit* | The restart was refused on purpose so it cannot cut an install short. Wait a minute or two and try again. |
+| The App Store install **refuses right after a flash** (coding missing / default) | The Store's own installer will **not** run while the head unit's coding is wiped — this is normal straight after a flash. **Restore the coding first** (code **HU_MGU by vehicle order / "code by FA"** in E-Sys/BimmerCode, or the saved `.ncd`), confirm the car's settings persist, then run **App Store → Install** again. |
+| *This does not look like an MGU … (no `/var/opt/public/oap/oap_*` folder)* | **Test connection** / the bridge now accepts **any** MainApp folder (base units can use a different one, e.g. `oap_13050` instead of `oap_12201`). If you still see this, the unit is **not rooted yet** — do **Root access** first — or it genuinely has no app platform. |
 | *The head unit did not answer on SSH again* | Give it a few more minutes. If it is up on the car but SSH stays closed, use **Root access → Enable (repair)** (no flashing). |
 
 ## Credits

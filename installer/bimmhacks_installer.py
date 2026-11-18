@@ -31,7 +31,7 @@ it. Stage C (App Store) needs internet at the car (or a prepared USB stick).
 """
 import argparse, hashlib, json, os, queue, re, shutil, stat, subprocess, sys, tempfile, threading, time
 
-VERSION = '1.18.0'
+VERSION = '1.19.0'
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 DEFAULT_IP = '169.254.36.47'                # the unit's address with the idrive7-8-ssh-root tool
@@ -235,10 +235,16 @@ class Car:
 # ----------------------------------------------------------------------------- the steps
 
 def test_connection(car, log):
-    """Check we can log in to the head unit as root and it is an MGU with the app platform."""
+    """Check we can log in to the head unit as root and it is an MGU with the app platform.
+
+    The app platform lives under /var/opt/public/oap/oap_<MainApp-uid>. That uid is NOT always 12201 -
+    other software levels / models use a different one (e.g. 13050; the Store's own unit_add_source.js
+    scans for it the same way), so match any oap_<digits> folder rather than hard-coding one, or an
+    early / base unit would be wrongly rejected as "not an MGU"."""
     log('Connecting to the head unit at %s ...' % car.ip)
     code, out = car.run('echo CONNECTED; id -u; '
-                        '[ -d /var/opt/public/oap/oap_12201 ] && echo MGU_OAP_OK; true', echo=False)
+                        'ls -d /var/opt/public/oap/oap_[0-9]* 2>/dev/null | grep -q . && echo MGU_OAP_OK; true',
+                        echo=False)
     if 'CONNECTED' not in out:
         raise InstallerError('Could not log in to the head unit (%s).\n%s\n'
                              'Check: ignition on, the car is connected (Ethernet / Wi-Fi), the IP address, '
@@ -246,7 +252,8 @@ def test_connection(car, log):
     if '\n0\n' not in '\n' + out + '\n':
         raise InstallerError('Logged in, but not as root. The installer needs the root SSH key.')
     if 'MGU_OAP_OK' not in out:
-        raise InstallerError('This does not look like an MGU (iDrive 7 / 8) head unit with the app platform.')
+        raise InstallerError('This does not look like an MGU (iDrive 7 / 8) head unit with the app platform '
+                             '(no /var/opt/public/oap/oap_* folder).')
     log('Connected as root. MGU app platform found.')
 
 
@@ -1601,11 +1608,11 @@ def run_gui():
     c5b = card(r5c, pady=(0, 10), padx=(6, 22))
     kicker(c5b, 'Why it fails')
     title(c5b, 'Same bootloader, older hardware')
-    para(c5b, 'Root flashes a debug image matched to the unit\'s hardware and security. A test 2020 F90 M5 '
-              'reports the SAME bootloader id (00003F36) as the verified 2023 cars, so the gate passes - but '
-              'its MGU hardware (HWEL 00005F34 vs 00009537) and software level (016.018 vs 030.016) are older, '
-              'and the image was captured on the newer hardware. "Identify unit" captures the exact HWEL and '
-              'software level so support for the base hardware can be added from a real flash log.', wrap=320)
+    para(c5b, 'The gate only checks the bootloader id, and a test 2020 F90 M5 has the SAME one (00003F36), so '
+              'the flash is not refused - it uses the same fixed image and security. What differs is the '
+              'SOFTWARE LEVEL (016.018 vs 030.016): the signed root key the unit trusts lives in that software, '
+              'so root LOGIN is the likely sticking point - "Fix refusing key". HWEL (00005F34 vs 00009537) just '
+              'marks it as the older / base hardware. Send a real flash log to settle flash-vs-login.', wrap=320)
 
     # ======================================================= 2. App Store
     p2 = section('App Store')

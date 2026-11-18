@@ -308,5 +308,35 @@ class InstallScript(unittest.TestCase):
         os.kill(pid, 0)          # raises ProcessLookupError if the daemon never started
 
 
+class ConnectionGate(unittest.TestCase):
+    """test_connection must accept any MGU MainApp uid, not only oap_12201 (a base unit can differ)."""
+
+    class FakeCar:
+        def __init__(self, resp):
+            self.ip = '169.254.14.173'
+            self.resp = resp
+            self.cmd = None
+
+        def run(self, cmd, **k):
+            self.cmd = cmd
+            return 0, self.resp
+
+    def test_oap_check_is_version_agnostic(self):
+        car = self.FakeCar('CONNECTED\n0\nMGU_OAP_OK\n')
+        bi.test_connection(car, lambda m: None)             # must not raise
+        self.assertIn('oap_[0-9]*', car.cmd, 'the platform check must match any oap_<uid>, not a fixed one')
+        self.assertNotIn('oap_12201', car.cmd, 'must not hard-code the 12201 MainApp uid')
+
+    def test_missing_platform_is_rejected(self):
+        car = self.FakeCar('CONNECTED\n0\n')               # no MGU_OAP_OK line
+        with self.assertRaises(bi.InstallerError):
+            bi.test_connection(car, lambda m: None)
+
+    def test_non_root_is_rejected(self):
+        car = self.FakeCar('CONNECTED\n1000\nMGU_OAP_OK\n')
+        with self.assertRaises(bi.InstallerError):
+            bi.test_connection(car, lambda m: None)
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)
