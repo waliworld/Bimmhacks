@@ -31,7 +31,7 @@ it. Stage C (App Store) needs internet at the car (or a prepared USB stick).
 """
 import argparse, hashlib, json, os, queue, re, shutil, stat, subprocess, sys, tempfile, threading, time
 
-VERSION = '1.15.0'
+VERSION = '1.16.0'
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 DEFAULT_IP = '169.254.36.47'                # the unit's address with the idrive7-8-ssh-root tool
@@ -739,6 +739,12 @@ BEEM_JOBS = {
 }
 
 
+def beem_wifi_ifaces(out):
+    """The Wi-Fi interfaces the bridge probe recommends opening (from its "--open-iface a,b" line)."""
+    m = re.search(r'--open-iface\s+([A-Za-z0-9_.,-]+)', out or '')
+    return m.group(1) if m else ''
+
+
 def _beem_install_args(app_uid=None, open_iface=None, channel=None, take_iface=False, no_systemd=False):
     """Validate and build the install.sh option string (these go into a remote shell command)."""
     args = ''
@@ -801,8 +807,19 @@ def do_beem(action, ssh, ip, key, log=print, **opts):
             log('Read the "firewall (read-only)" lines above: the head unit filters its Wi-Fi with an')
             log('allow-list, so if the bridge ports read BLOCKED, that open-iface install is what opens')
             log('them (from BeeM-Flash v2.30 this works on nftables units, where it used to do nothing).')
+        if action == 'car-probe' and re.search(r'6801\s+NOT listening', out):
+            log('')
+            log('NOTE: the car\'s BeeM-Flash APP is not listening on TCP 6801 (HSFZ/ENET) - that is the port')
+            log('MHD, E-Sys and ISTA use, so they cannot connect even when the network path is fine (DoIP')
+            log('13400 is up). Update the BeeM-Flash app ON THE CAR (Apps > Store) to v2.30.0 or newer and')
+            log('turn BRIDGE: ON, then run this probe again. The helper here cannot provide that listener.')
         if action == 'install':
             why = []
+            if 'no hostapd/iw' in out and not opts.get('open_iface'):
+                log('')
+                log('NOTE: this unit cannot host its own Wi-Fi AND you installed with an empty "open car-Wi-Fi')
+                log('iface" field, so no firewall ports were opened - the helper is not doing anything here yet.')
+                log('Run "Check unit (AP probe)" (it fills that field in for you), then install again.')
             if ('read-only /etc' in out or '/etc is read-only' in out
                     or 'NOT started at boot' in out):
                 why.append('/etc is read-only on this unit, so no boot service could be written. The helper '
@@ -1720,7 +1737,15 @@ def run_gui():
             save_config(dict(load_config(), bridge_uid=bridge_uid.get().strip()))
             opts = dict(app_uid=bridge_uid.get().strip() or None, open_iface=bridge_openif.get().strip() or None,
                         channel=bridge_chan.get().strip() or None, take_iface=bridge_take.get())
-        start(lambda: do_beem(action, need_ssh(), ip, key, log=log, **opts), done)
+        def w():
+            code, out = do_beem(action, need_ssh(), ip, key, log=log, **opts)
+            if action == 'probe':
+                ifs = beem_wifi_ifaces(out)
+                if ifs and not bridge_openif.get().strip():
+                    ui_set(bridge_openif, ifs)
+                    log('Filled "open car-Wi-Fi iface" with %s - install again to open the bridge ports '
+                        'there.' % ifs)
+        start(w, done)
 
     br1 = row(c4, pady=(10, 4))
     button(br1, 'Check unit (AP probe)', lambda: on_bridge(

@@ -198,6 +198,16 @@ Steps:
 > Wi-Fi interface (usually `wlan_bridge`), then join that network from the phone and use the address the
 > car shows; or join the car to your phone's hotspot instead.
 
+> **If a tool still cannot connect, check what is listening.** The helper only handles the Wi-Fi and the
+> firewall — the **listener is the BeeM-Flash app on the car**. The car probe's *P2b* section says which
+> ports are up. `tcp 6801` is HSFZ/ENET, the port **MHD, E-Sys and ISTA** use; if it reads *NOT listening*
+> while 13400 (DoIP) is up, update the **app on the car** (Apps → Store) to **v2.30.0 or newer** and turn
+> **BRIDGE: ON**. No amount of firewall opening fixes a missing listener.
+
+> **Fill in "open car-Wi-Fi iface".** On a unit that cannot host its own AP this is the whole point of the
+> helper — installing with it empty opens nothing. Run **Check unit (AP probe)** first: it now fills the
+> field in for you with the interfaces it found (e.g. `wlan_bridge,wlan1`), then install again.
+
 > **If `/etc` is read-only** the boot service cannot be written. The helper still starts — as a
 > *transient* supervised service where the unit has `systemd-run`, otherwise in the background — and the
 > install prints a **`boot:`** line telling you which. In that case it does **not** come back after a

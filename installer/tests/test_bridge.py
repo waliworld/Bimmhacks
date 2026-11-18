@@ -39,6 +39,12 @@ case "$cmd" in
         if [ -n "${NO_AP:-}" ]; then
             echo "tool hostapd: MISSING"
             echo "tool iw: MISSING"
+            echo "   -> anything BLOCKED: install with  --open-iface wlan_bridge,wlan1"
+            echo "NOTE: this head unit has no hostapd/iw, so it cannot host its own Wi-Fi network:"
+        fi
+        if [ -n "${NO_6801:-}" ]; then
+            echo "  tcp 6801  NOT listening - HSFZ/ENET (MHD, E-Sys, ISTA)"
+            echo "  tcp 13400  listening   - DoIP"
         fi
         printf 'RAN %s\\n' "$cmd" ;;
 esac
@@ -145,6 +151,32 @@ class BridgeDeploy(unittest.TestCase):
         text = '\n'.join(lines)
         self.assertIn('cannot host its OWN Wi-Fi network', text)
         self.assertIn('open car-Wi-Fi iface', text)
+
+    def test_probe_reports_the_interfaces_to_open(self):
+        os.environ['NO_AP'] = '1'
+        self.addCleanup(os.environ.pop, 'NO_AP', None)
+        _, _, _ = self.run_beem('probe')
+        self.assertEqual(bi.beem_wifi_ifaces('-> install with  --open-iface wlan_bridge,wlan1'),
+                         'wlan_bridge,wlan1')
+        self.assertEqual(bi.beem_wifi_ifaces('no recommendation here'), '')
+
+    def test_car_probe_flags_the_app_not_listening_on_6801(self):
+        os.environ['NO_6801'] = '1'
+        self.addCleanup(os.environ.pop, 'NO_6801', None)
+        _, _, lines = self.run_beem('car-probe')
+        text = '\n'.join(lines)
+        self.assertIn('not listening on TCP 6801', text)
+        self.assertIn('Apps > Store', text)
+
+    def test_install_without_open_iface_on_a_no_ap_unit_warns(self):
+        os.environ['NO_AP'] = '1'
+        self.addCleanup(os.environ.pop, 'NO_AP', None)
+        _, _, lines = self.run_beem('install')            # no open_iface passed
+        text = '\n'.join(lines)
+        self.assertIn('not doing anything here yet', text)
+        # and it does NOT warn when the field was filled in
+        lines2 = self.run_beem('install', open_iface='wlan_bridge')[2]
+        self.assertNotIn('not doing anything here yet', '\n'.join(lines2))
 
     def test_uninstall_only_sends_uninstall(self):
         code, cmds, _ = self.run_beem('uninstall')
