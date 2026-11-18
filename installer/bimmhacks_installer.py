@@ -31,7 +31,7 @@ it. Stage C (App Store) needs internet at the car (or a prepared USB stick).
 """
 import argparse, hashlib, json, os, queue, re, shutil, stat, subprocess, sys, tempfile, threading, time
 
-VERSION = '1.17.0'
+VERSION = '1.18.0'
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 DEFAULT_IP = '169.254.36.47'                # the unit's address with the idrive7-8-ssh-root tool
@@ -423,19 +423,22 @@ BASE_PROFILE_DIR = os.path.join(REPO, 'base-profiles')     # iDrive 7 Base: save
 
 
 def do_base_identity(log, vin=None, ip=None, gateway='auto', out_dir=None):
-    """iDrive 7 Base, READ-ONLY: read the unit's identity (SVK / BTLD) and save a profile. It tells you
-    whether this is the supported MGU type (BTLD 00003F36 -> use the Root access tab) or an early / base MGU
-    whose bootloader is outside the current debug catalog (which is why root flashing is refused on it).
-    -> the saved profile path."""
+    """iDrive 7 Base, READ-ONLY: read the unit's identity (SVK / BTLD / HWEL) and save a profile. The base
+    units share the supported bootloader id (00003F36) with the verified cars; what differs is the MGU
+    hardware (HWEL) and the software level. -> the saved profile path."""
     out_dir = out_dir or BASE_PROFILE_DIR
     log('Reading the unit identity over ENET (read-only - nothing is written to the car) ...')
     code, lines = _run_coding(['identity', '--out', out_dir], log, gateway=gateway, ip=ip)
     if code == 0:
-        log('Verdict: SUPPORTED MGU bootloader. Root this car on the "Root access" tab (not here).')
+        log('Verdict: VERIFIED iDrive 7 hardware. Root this car on the "Root access" tab (not here).')
     elif code == 3:
-        log('Verdict: early / base MGU - its bootloader (BTLD) is not 00003F36, so it is outside the root '
-            'tool\'s debug catalog. Root flashing is not available for this unit yet. The saved profile is '
-            'exactly what is needed to add support - send it to the developer.')
+        log('Verdict: early / base MGU. The bootloader is supported, but this unit\'s hardware (HWEL) and '
+            'software level differ from the verified cars - so root is NOT refused, but it may not take. '
+            'Try the normal Root access flash and SEND the full log (and the saved profile): login refused '
+            'after port 22 opens is a "Fix refusing key" case; a flash that fails needs a base capture.')
+    elif code == 4:
+        log('Verdict: this unit\'s bootloader id is not 00003F36 (or it is an NBT / iDrive 6 unit) - it is '
+            'outside the root tool\'s catalog entirely. The saved profile is what is needed to look into it.')
     else:
         log('Could not read the unit. Is the ENET cable in, the ignition on, and the car awake?')
         raise InstallerError('The unit identity could not be read over ENET.')
@@ -1543,13 +1546,15 @@ def run_gui():
     c5 = card(l5, pady=(0, 10), padx=(22, 6))
     kicker(c5, 'Early / base MGU  ·  experimental')
     title(c5, 'iDrive 7 Base (early MGU)')
-    para(c5, 'For the earliest MGU iDrive 7 units (e.g. pre-LCI F90 M5, 2019-2020) that the Root access tab '
-             'refuses. The root tool\'s debug catalog covers one bootloader (BTLD 00003F36); these base units '
-             'report a different one, so the normal flash is refused. This tab is separate and never changes '
-             'how the verified cars (2023 G87 iDrive 8, 2023 X3M40i iDrive 7) are rooted.', wrap=470)
-    notice(c5, 'Start with "Identify unit" (read-only). If it reads early / base, root is not in the catalog '
-               'for that bootloader yet - the saved profile is exactly what is needed to add it. "Attempt root '
-               '(force)" is an experimental long shot with a BRICK RISK.', wrap=470)
+    para(c5, 'For the earliest MGU iDrive 7 units (e.g. pre-LCI F90 M5, 2019-2020) where root does not take. '
+             'These share the SAME supported bootloader (BTLD 00003F36) as the verified cars - so the flash is '
+             'not refused - but their MGU hardware (HWEL) and software level are older, which can stop root '
+             'from working. This tab is separate and never changes how the verified cars (2023 G87 iDrive 8, '
+             '2023 X3M40i iDrive 7) are rooted.', wrap=470)
+    notice(c5, 'Start with "Identify unit" (read-only): it shows the HWEL and software level and compares '
+               'them to the verified car. If it reads early / base, try the normal Root access flash and send '
+               'the log + the saved profile. "Attempt root (force)" is only for a unit whose bootloader id is '
+               'actually different, and is a BRICK-RISK long shot.', wrap=470)
     base_backup = tk.BooleanVar(value=False)
 
     def open_profiles():
@@ -1595,12 +1600,12 @@ def run_gui():
     # ---- right: why it fails ---------------------------------------------------------------------
     c5b = card(r5c, pady=(0, 10), padx=(6, 22))
     kicker(c5b, 'Why it fails')
-    title(c5b, 'The bootloader catalog')
-    para(c5b, 'Root works by flashing a debug image that matches the unit\'s bootloader (BTLD) and its '
-              'security keys. The catalog has one today: BTLD 00003F36 (the verified cars). An early / base '
-              'MGU reports a different BTLD, so there is no matching image - forcing the wrong one is what '
-              'risks a brick. "Identify unit" captures the exact BTLD and software levels so support can be '
-              'added safely for that unit.', wrap=320)
+    title(c5b, 'Same bootloader, older hardware')
+    para(c5b, 'Root flashes a debug image matched to the unit\'s hardware and security. A test 2020 F90 M5 '
+              'reports the SAME bootloader id (00003F36) as the verified 2023 cars, so the gate passes - but '
+              'its MGU hardware (HWEL 00005F34 vs 00009537) and software level (016.018 vs 030.016) are older, '
+              'and the image was captured on the newer hardware. "Identify unit" captures the exact HWEL and '
+              'software level so support for the base hardware can be added from a real flash log.', wrap=320)
 
     # ======================================================= 2. App Store
     p2 = section('App Store')

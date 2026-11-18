@@ -31,9 +31,17 @@ import bimmhacks_installer as bi         # noqa: E402
 
 HAVE_CRYPTO = importlib.util.find_spec('cryptography') is not None
 VIN = 'WBA5R1C0XLFJ12345'
-# a base / early MGU: same shape, but the bootloader id is not 00003F36
-BASE_SVK = [(1, 0x00000001, 1, 2, 3), (6, 0x00009999, 30, 16, 6),
-            (5, 0x000000AB, 12, 34, 56), (8, 0x000056E5, 30, 16, 2)]
+# SVK records are (type, id, trip_a, trip_b, trip_c). types: 1 HWEL, 5 CAFD, 6 BTLD, 8 SWFL.
+# A VERIFIED iDrive 7 car: supported bootloader AND the known-good MGU hardware (HWEL 00009537).
+VERIFIED_SVK = [(1, 0x00009537, 1, 3, 2), (6, 0x00003F36, 30, 16, 6),
+                (5, 0x00003E52, 8, 10, 124), (8, 0x000056E5, 30, 16, 2)]
+# An early / base MGU (a 2020 F90 M5 in the field): SAME bootloader id, but different hardware
+# (HWEL 00005F34) and an older software level - this is the real "base" case.
+BASE_SVK = [(1, 0x00005F34, 1, 1, 4), (6, 0x00003F36, 16, 18, 10),
+            (5, 0x00003E52, 6, 36, 28), (8, 0x000056E5, 16, 18, 4)]
+# A unit whose bootloader id itself is different - outside the catalog entirely.
+UNSUPPORTED_SVK = [(1, 0x00009537, 1, 3, 2), (6, 0x00009999, 30, 16, 6),
+                   (5, 0x00003E52, 8, 10, 124), (8, 0x000056E5, 30, 16, 2)]
 
 
 def quiet(_m):
@@ -56,27 +64,39 @@ class Identity(unittest.TestCase):
         self._real = discovery.discover
         self.addCleanup(setattr, discovery, 'discover', self._real)
 
-    def test_supported_unit_is_recognised(self):
+    def test_verified_hardware_is_recognised(self):
         loopback_discovery()
-        with FakeCar(vin=VIN):
+        with FakeCar(vin=VIN, svk=VERIFIED_SVK):
             info = cb.read_identity(gateway='127.0.0.1', out=self.out, log=quiet)
         self.assertEqual(info['btld'], '00003F36')
+        self.assertEqual(info['hwel'], '00009537')
         self.assertTrue(info['is_supported_mgu'])
+        self.assertTrue(info['hwel_matches_verified'])
         self.assertFalse(info['is_nbt'])
-        self.assertTrue(info['profile'].endswith('.json'))
 
-    def test_base_unit_is_flagged_unsupported_and_profiled(self):
+    def test_base_unit_shares_the_bootloader_but_differs_in_hardware(self):
         loopback_discovery()
         with FakeCar(vin=VIN, svk=BASE_SVK):
             info = cb.read_identity(gateway='127.0.0.1', out=self.out, log=quiet)
-        self.assertEqual(info['btld'], '00009999')
-        self.assertFalse(info['is_supported_mgu'])
+        # the key correction: the base unit's bootloader IS supported ...
+        self.assertEqual(info['btld'], '00003F36')
+        self.assertTrue(info['is_supported_mgu'])
+        # ... but its hardware (HWEL) and software level are the real difference
+        self.assertEqual(info['hwel'], '00005F34')
+        self.assertFalse(info['hwel_matches_verified'])
+        self.assertEqual(info['sw_level'], '016.018.010')
         self.assertTrue(os.path.isfile(info['profile']), 'a base unit must still save a profile')
         import json
         with open(info['profile']) as f:
             saved = json.load(f)
-        self.assertEqual(saved['btld'], '00009999')
-        self.assertIn('BTLD 00009999_030.016.006', saved['svk'])
+        self.assertEqual(saved['hwel'], '00005F34')
+
+    def test_a_different_bootloader_id_is_unsupported(self):
+        loopback_discovery()
+        with FakeCar(vin=VIN, svk=UNSUPPORTED_SVK):
+            info = cb.read_identity(gateway='127.0.0.1', out=self.out, log=quiet)
+        self.assertEqual(info['btld'], '00009999')
+        self.assertFalse(info['is_supported_mgu'])
 
     def test_identity_read_is_read_only(self):
         loopback_discovery()
@@ -87,16 +107,16 @@ class Identity(unittest.TestCase):
         self.assertNotIn(0x2E, services)        # never a write
         self.assertNotIn(0x34, services)        # never a RequestDownload (flash)
 
-    def test_installer_verdict_exit_codes(self):
+    def test_installer_verdicts(self):
         # do_base_identity drives coding_backup.py as a subprocess; the fake car answers on 127.0.0.1
-        lines = []
-        with FakeCar(vin=VIN, svk=BASE_SVK):
-            bi.do_base_identity(lines.append, ip=None, gateway='127.0.0.1', out_dir=self.out)
-        self.assertTrue(any('early / base MGU' in l for l in lines), 'base verdict missing: %s' % lines[-3:])
-        lines = []
-        with FakeCar(vin=VIN):
-            bi.do_base_identity(lines.append, ip=None, gateway='127.0.0.1', out_dir=self.out)
-        self.assertTrue(any('SUPPORTED MGU' in l for l in lines), 'supported verdict missing: %s' % lines[-3:])
+        def verdict(svk):
+            lines = []
+            with FakeCar(vin=VIN, svk=svk):
+                bi.do_base_identity(lines.append, ip=None, gateway='127.0.0.1', out_dir=self.out)
+            return '\n'.join(lines)
+        self.assertIn('VERIFIED iDrive 7 hardware', verdict(VERIFIED_SVK))
+        self.assertIn('early / base MGU', verdict(BASE_SVK))
+        self.assertIn('outside the root tool', verdict(UNSUPPORTED_SVK))
 
 
 class ForceRootGate(unittest.TestCase):

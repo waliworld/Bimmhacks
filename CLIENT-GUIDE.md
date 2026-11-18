@@ -93,21 +93,24 @@ write it back:
 
 ## iDrive 7 Base (early MGU)
 
-Some of the **earliest MGU iDrive 7 units** — for example a pre-LCI **F90 M5 (2019-2020)** — report a
-different bootloader (**BTLD**) than the cars the root tool was built for. Root works by flashing a debug
-image matched to the unit's bootloader and security, and the catalog currently covers one bootloader
-(`00003F36`, the verified cars). A base unit's different bootloader is why **Flash + enable SSH** on the
-Root access tab refuses it. This tab is **separate** and never changes how those verified cars are rooted.
+Some of the **earliest MGU iDrive 7 units** — for example a pre-LCI **F90 M5 (2019-2020)** — fail to root
+even though the Root access tab accepts them. A test unit shows why: it reports the **same** supported
+bootloader (**BTLD `00003F36`**) as the verified cars, so the flash is **not** refused — but its MGU
+**hardware** (HWEL `00005F34` vs the verified `00009537`) and its **software level** (`016.018` vs
+`030.016`) are older, and the root tool's debug image was captured on the newer hardware. This tab is
+**separate** and never changes how those verified cars are rooted.
 
-- **Identify unit (read-only)** — reads the unit's software versions (SVK), shows its **BTLD**, and says
-  whether it is the supported type or an early / base MGU. It writes a small profile to `base-profiles/`.
-  If it reads *early / base*, root is not in the catalog for that bootloader yet — **that profile is
-  exactly what's needed to add support**, so send it over. **Open profiles folder** opens that folder.
-- **Attempt root (force — brick risk)** — experimental. It overrides the bootloader check and tries the
-  standard debug image anyway. Because the image and security are for a different bootloader, it will
-  **most often stop at the security step with nothing written**, but a mismatch that gets further can
-  leave the unit **unbootable**. Do this only on a car you own and are willing to risk, with **E-Sys /
-  ISTA** ready. It requires the coding-backup confirmation and a second brick-risk confirmation.
+- **Identify unit (read-only)** — reads the unit's software versions (SVK), shows its **BTLD**, **MGU
+  hardware (HWEL)** and **software level**, and compares them to a verified iDrive 7 car. It writes a
+  profile to `base-profiles/`. If it reads *early / base*, the next step is to **run the normal Root access
+  flash and send that log plus the profile** — login refused after port 22 opens is a *Fix refusing key*
+  case; a flash that fails means the base hardware needs its own capture. **Open profiles folder** opens
+  that folder.
+- **Attempt root (force — brick risk)** — experimental, and only meaningful for a unit whose **bootloader
+  id is actually different** (not the usual base case, which the gate already passes). It overrides the
+  bootloader check and tries the standard image; it will most often stop at the security step with nothing
+  written, but a mismatch that gets further can leave the unit **unbootable**. Only on a car you own and
+  are willing to risk, with **E-Sys / ISTA** ready; it requires the coding-backup and a brick-risk confirm.
 
 ## App Store
 

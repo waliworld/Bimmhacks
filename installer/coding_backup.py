@@ -137,37 +137,58 @@ def _now():
     return datetime.datetime.now().strftime('%Y%m%dT%H%M%S')
 
 
-SUPPORTED_BTLD = '00003F36'      # the one MGU bootloader the root tool's debug catalog covers
+SUPPORTED_BTLD = '00003F36'      # the MGU bootloader id the root tool's debug catalog covers (all iDrive 7/8)
+# MGU hardware (HWEL id) seen on a VERIFIED-rooting iDrive 7 car (2023 X3M40i). The early / base units
+# (e.g. a 2020 F90 M5) report a DIFFERENT HWEL (00005F34) and a much older software level, even though the
+# BTLD id is the same - that hardware/software difference, not the bootloader, is the real "base" signal.
+KNOWN_GOOD_ID7_HWEL = {'00009537'}
 
 
 def read_identity(gateway='auto', mgu_ip=None, vin=None, out=None, log=print):
     """Read-only unit identity for the iDrive 7 Base diagnostic: the full SVK (BTLD / SWFL / CAFD / HWEL),
-    VIN, and whether the bootloader is the root tool's supported type (BTLD 00003F36). Early / base MGU
-    units report a different BTLD, which is why the root flash refuses them. Writes a profile file when out
-    is given. It never writes to the car. -> the identity dict."""
+    the VIN, the bootloader id and software level, and the MGU hardware (HWEL). The BTLD id is the SAME
+    (00003F36) on the base units as on the verified cars - what differs is the HWEL (hardware) and the
+    software level - so is_supported_mgu is not the whole story. Writes a profile file when out is given.
+    It never writes to the car. -> the identity dict."""
     from mgu7 import diag
     client, gw, found_vin = _open_client(gateway, mgu_ip, vin, log)
     try:
         log('Reading the unit identity (software versions / SVK) ...')
         svk = diag.read_svk(client)
         btld = svk.find('BTLD')
+        hwel = svk.find('HWEL')
+        hwel_id = hwel.version_hex() if hwel else None
+        hwel_known = hwel_id in KNOWN_GOOD_ID7_HWEL if hwel_id else None
         info = {'tool': 'bimmhacks base identity', 'taken': _now(), 'gateway': gw, 'vin': found_vin,
                 'svk': [str(r) for r in svk.records],
                 'btld': btld.version_hex() if btld else None,
                 'btld_trip': btld.trip_text() if btld else None,
+                'sw_level': btld.trip_text() if btld else None,
+                'hwel': hwel_id,
+                'hwel_verified_id7': sorted(KNOWN_GOOD_ID7_HWEL),
+                'hwel_matches_verified': hwel_known,
                 'supported_btld': SUPPORTED_BTLD,
                 'is_supported_mgu': bool(svk.is_supported_mgu()),
                 'is_nbt': bool(svk.is_nbt())}
         for r in svk.records:
             log('  ' + str(r))
-        if info['is_supported_mgu']:
-            log('BTLD %s -> the SUPPORTED MGU debug catalog. Use the Root access tab; if login is still '
-                'refused there, use "Fix refusing key".' % info['btld'])
-        elif info['is_nbt']:
+        if info['is_nbt']:
             log('This is an NBT / EVO (iDrive 6) unit, not an MGU - root over ENET is not available.')
+        elif not info['is_supported_mgu']:
+            log('BTLD %s -> NOT the supported %s. The bootloader id itself is different - this unit is '
+                'outside the root tool\'s debug catalog entirely.' % (info['btld'], SUPPORTED_BTLD))
+        elif hwel_known:
+            log('BTLD %s (sw %s), HWEL %s -> matches a VERIFIED iDrive 7 car. Root it on the "Root access" '
+                'tab; if login is refused there, use "Fix refusing key".' % (info['btld'], info['sw_level'], hwel_id))
         else:
-            log('BTLD %s -> NOT the supported %s. This is an early / base MGU outside the current debug '
-                'catalog; that is why root flashing is refused on it.' % (info['btld'], SUPPORTED_BTLD))
+            log('BTLD %s is supported, BUT the hardware/software differ from the verified cars:' % info['btld'])
+            log('  HWEL (MGU hardware): %s   vs verified %s' % (hwel_id, ', '.join(sorted(KNOWN_GOOD_ID7_HWEL))))
+            log('  software level:      %s   (the verified iDrive 7 car is on 030.016.x)' % info['sw_level'])
+            log('This is the early / base MGU class (e.g. a pre-LCI F90 M5). Root flashing is NOT refused')
+            log('here - the bootloader gate passes - but the debug image and security were captured on the')
+            log('newer hardware/software, so it may not take. Try the normal Root access flash and SEND the')
+            log('full flash log: if port 22 opens but login is refused it is a "Fix refusing key" case; if')
+            log('the flash itself fails, the base hardware needs its own capture.')
         if out:
             os.makedirs(out, exist_ok=True)
             path = os.path.join(out, 'base-profile-%s-%s.json' % (found_vin or 'unknown', info['taken']))
@@ -505,7 +526,9 @@ def main(argv=None):
             return 0 if r.get('verified') else 1
         if a.action == 'identity':
             info = read_identity(gateway=a.gateway, mgu_ip=a.mgu_ip, vin=a.vin, out=a.out, log=log)
-            return 0 if info.get('is_supported_mgu') else 3    # 3: read ok, but not the supported BTLD
+            if not info.get('is_supported_mgu'):
+                return 4                                       # 4: bootloader id itself not supported (or NBT)
+            return 0 if info.get('hwel_matches_verified') else 3   # 0: verified match | 3: supported BTLD, base hardware
         if not a.backup:
             ap.error('--backup <file.json> is needed')
         bk = load_backup(a.backup)

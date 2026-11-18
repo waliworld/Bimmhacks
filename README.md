@@ -62,12 +62,12 @@ Five tabs, worked left to right:
   tool). **Fix blue screen** recovers a unit stuck in programming mode. The card on the right is the
   experimental **coding restore** — Verify / Dry run / Restore, which can write the captured coding (NCD)
   back after a flash and read it back to check.
-- **iDrive 7 Base.** For the earliest MGU iDrive 7 units (e.g. pre-LCI F90 M5, 2019-2020) that the Root
-  access tab refuses. The root tool's debug catalog covers one bootloader (BTLD `00003F36`); base units
-  report a different one, so the normal flash is refused. **Identify unit** (read-only) reads the unit's
-  BTLD and saves a profile — the exact data needed to add support; **Attempt root (force)** is an
-  experimental, brick-risk long shot. This tab is fully separate and never changes how the verified cars
-  (2023 G87 iDrive 8, 2023 X3M40i iDrive 7) are rooted.
+- **iDrive 7 Base.** For the earliest MGU iDrive 7 units (e.g. pre-LCI F90 M5, 2019-2020) where root does
+  not take. They share the **same supported bootloader** (BTLD `00003F36`) as the verified cars — so the
+  flash is *not* refused — but their MGU **hardware** (HWEL, e.g. `00005F34` vs `00009537`) and **software
+  level** (`016.018` vs `030.016`) are older, which is what stops root. **Identify unit** (read-only) shows
+  the HWEL and software level and compares them to the verified car, saving a profile. This tab is fully
+  separate and never changes how the verified cars (2023 G87 iDrive 8, 2023 X3M40i iDrive 7) are rooted.
 - **App Store.** Install the on-car MGU **App Store** (its renderer and internet uplink, each explained),
   and the installer restarts the head unit for you so the Store comes up. Add **RideTube** (and your own
   repo) to it in one click — from there every app installs on the car, from the Store.
