@@ -198,6 +198,13 @@ Steps:
 > Wi-Fi interface (usually `wlan_bridge`), then join that network from the phone and use the address the
 > car shows; or join the car to your phone's hotspot instead.
 
+> **If the car probe is never reached in EITHER phase**, the wireless path itself is the problem, not the
+> firewall (phase B holds an accept rule open while you retry). Both the car's own Wi-Fi and a phone
+> hotspot commonly **isolate their clients**, so nothing can reach the head unit on them. What works is an
+> **ordinary Wi-Fi router / travel router with client (AP) isolation turned off**: join the car to it, put
+> the tool on the same network, and use the car's address on that interface. Also make sure the phone
+> actually stayed on that Wi-Fi — iOS falls back to cellular when it reports "No Internet Connection".
+
 > **If a tool still cannot connect, check what is listening.** The helper only handles the Wi-Fi and the
 > firewall — the **listener is the BeeM-Flash app on the car**. The car probe's *P2b* section says which
 > ports are up. `tcp 6801` is HSFZ/ENET, the port **MHD, E-Sys and ISTA** use; if it reads *NOT listening*
@@ -206,7 +213,7 @@ Steps:
 
 > **Fill in "open car-Wi-Fi iface".** On a unit that cannot host its own AP this is the whole point of the
 > helper — installing with it empty opens nothing. Run **Check unit (AP probe)** first: it now fills the
-> field in for you with the interfaces it found (e.g. `wlan_bridge,wlan1`), then install again.
+> field in for you with **`wifi`** — every Wi-Fi interface, i.e. the car's own Wi-Fi *and* a hotspot it joined — then install again. From BeeM-Flash v2.31 the install also checks the car's firewall and says outright if the bridge ports are being dropped.
 
 > **If `/etc` is read-only** the boot service cannot be written. The helper still starts — as a
 > *transient* supervised service where the unit has `systemd-run`, otherwise in the background — and the

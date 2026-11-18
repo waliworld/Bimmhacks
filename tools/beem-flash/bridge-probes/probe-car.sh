@@ -56,7 +56,8 @@ for P in "tcp 6801 HSFZ/ENET (MHD, E-Sys, ISTA)" "tcp 13400 DoIP" "udp 6811 HSFZ
   if echo "$L" | grep -E "^$PROTO" | grep -qE "[:.]$PN[[:space:]]"; then echo "  $PROTO $PN  listening   - $*"
   else echo "  $PROTO $PN  NOT listening - $*"; fi
 done
-echo "  (if 6801 is NOT listening: update BeeM-Flash to v2.30.0+ and turn the bridge on)"
+echo "  (if 6801 is NOT listening: check the BeeM-Flash header shows v2.31.0+, turn the bridge on;"
+echo "   the bridge page shows in red why a port could not be served)"
 
 echo; echo "### P3: can the phone reach the head unit? ###"
 if [ -z "$WIFIS" ]; then
@@ -66,12 +67,14 @@ else
   for W in $WIFIS; do echo "      http://${W#*:}:$TPORT/      (via ${W%%:*})"; done
   echo "A page saying 'BeeM-Flash probe: reached' means that path works."
   node -e "
-    var n=require('net'),ifs=process.argv.slice(1);
+    var n=require('net'),ifs=process.argv.slice(1),hits=0;
+    function done(){console.log('  P3 result: '+(hits?hits+' phone request(s) REACHED the head unit':'NOTHING reached the head unit in either phase (if you did open the page: the phone is on another network, or the Wi-Fi keeps devices apart)'));process.exit(0);}
+    process.on('SIGTERM',done);
     ifs.forEach(function(w){var ip=w.split(':')[1],name=w.split(':')[0];
-      n.createServer(function(s){console.log('  >>> REACHED via '+name+' from '+String(s.remoteAddress).replace('::ffff:',''));
+      n.createServer(function(s){hits++;console.log('  >>> REACHED via '+name+' from '+String(s.remoteAddress).replace('::ffff:','')+' at '+new Date().toISOString().slice(11,19));
         s.end('HTTP/1.0 200 OK\r\nContent-Type: text/plain\r\n\r\nBeeM-Flash probe: reached the head unit via '+name+'\n');})
       .on('error',function(e){console.log('  (cannot listen on '+ip+':$TPORT: '+e.code+')');}).listen($TPORT,ip);});
-    setTimeout(function(){process.exit(0);},(2*$SECS+5)*1000);" $WIFIS &
+    setTimeout(done,(2*$SECS+5)*1000);" $WIFIS &
   NPID=$!
   echo; echo "Phase A ($SECS s): the firewall as it is now. Open the address(es) on the phone now."
   sleep "$SECS"
@@ -87,7 +90,7 @@ else
     echo; echo "Phase B ($SECS s): no firewall rule could be added; reload anyway."
   fi
   sleep "$SECS"
-  kill "$NPID" 2>/dev/null
+  kill "$NPID" 2>/dev/null; sleep 1
   if [ -n "$CH" ]; then
     for H in $(nft -a list chain $CH 2>/dev/null | grep '"beem-probe"' | sed -n 's/.*# handle \([0-9]*\).*/\1/p'); do
       nft delete rule $CH handle "$H" 2>/dev/null

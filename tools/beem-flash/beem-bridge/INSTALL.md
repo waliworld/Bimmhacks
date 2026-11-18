@@ -114,6 +114,22 @@ differs, pass it in step 5 with `--app-uid NNNNN`.
 
 ## 5. Install
 
+**On BMW head units, install with the Wi-Fi firewall opened.** Their firewall drops
+every port it doesn't know on Wi-Fi (the input chain ends in a catch-all
+`logblocked … drop`), so MHD / ENET tools can't reach the bridge until the bridge
+ports are opened. `wifi` covers the car's own Wi-Fi (`wlan_bridge`) **and** a phone
+hotspot the car joins (`wlan1`):
+
+```bash
+sh install.sh --open-iface wifi
+```
+
+At the end the installer reads the car's firewall and prints, per Wi-Fi interface,
+whether the bridge ports are accepted. If it prints `!! … DROPS the bridge ports`,
+the ports are still closed. The app's bridge page shows the same check in red or green.
+
+Without opening the firewall (only on a unit that doesn't block them):
+
 ```bash
 sh install.sh
 ```
@@ -144,7 +160,7 @@ You should see `beem-bridged is installed and answering (systemd).`
 
 | Switch | When |
 |---|---|
-| `--open-iface wlan_bridge` | You want to keep using the **car's own Wi-Fi** and the problem is its firewall. Opens the bridge ports on that interface while the helper runs. |
+| `--open-iface wifi` | **Needed on BMW units.** Opens tcp 6801/13400 and udp 6811/13400 on every Wi-Fi interface (car Wi-Fi and phone hotspot) while the helper runs; removed when it stops. A single interface also works, e.g. `--open-iface wlan_bridge`. |
 | `--take-iface` | The probe showed the chip **can't** run a second network. This lets the helper take over the Wi-Fi radio. **The car's own Wi-Fi and wireless CarPlay drop while the bridge network is on.** |
 | `--channel N` | Fix the network's Wi-Fi channel (default: the same channel the car's Wi-Fi uses). |
 | `--no-systemd` | Force a detached start (it won't start at boot). |

@@ -62,6 +62,7 @@ function opt(name, dflt) {
 var OPT = {
   probe: argv.indexOf('--probe') >= 0,
   status: argv.indexOf('--status') >= 0,
+  fwCheck: argv.indexOf('--fw-check') >= 0,
   takeIface: argv.indexOf('--take-iface') >= 0,     // allow using the phys iface if no virtual AP
   iface: String(opt('iface', '') || ''),
   vif: String(opt('vif', 'beem0')),
@@ -70,7 +71,11 @@ var OPT = {
   country: String(opt('country', 'US')).toUpperCase().slice(0, 2),
   addr: String(opt('addr', '192.168.44.1')),
   idleSec: Number(opt('idle', 1800)) || 1800,
-  openIfaces: String(opt('open-iface', '') || '').split(',').filter(Boolean),
+  // "wifi" = every Wi-Fi interface (nft pattern wl*): the car's own Wi-Fi
+  // (wlan_bridge) AND a hotspot the car joins later (wlan1), which only
+  // exists while it is joined.
+  openIfaces: String(opt('open-iface', '') || '').split(',').filter(Boolean)
+    .map(function (x) { return x === 'wifi' ? 'wl*' : x; }),
   appUid: opt('uid', null) === null ? null : Number(opt('uid', null)),
   appGid: Number(opt('gid', 12202)) || 12202,       // tm_oap_app: the app's group
   runDir: String(opt('rundir', '/run/beem-bridge')),
@@ -99,7 +104,7 @@ function cleanText(s, min, max) {
   if (!/^[\x20-\x7e]+$/.test(s)) return null;
   return s;
 }
-function cleanIface(s) { return /^[A-Za-z0-9_.-]{1,15}$/.test(String(s)) ? String(s) : null; }
+function cleanIface(s) { return /^[A-Za-z0-9_.-]{1,15}\*?$/.test(String(s)) ? String(s) : null; }
 
 // ---- radio / interfaces ----------------------------------------------------
 function ifaceList() {
@@ -221,6 +226,7 @@ function nftHandles(iface) {
   return out;
 }
 function fwOpen(iface, withDhcp) {
+  if (typeof wifiFwCache !== 'undefined') wifiFwCache.at = 0;
   var kind = fwKind();
   if (kind === 'none') { FW.note = 'no usable firewall tool (nothing opened)'; return; }
   if (kind === 'nft') {
@@ -239,7 +245,7 @@ function fwOpen(iface, withDhcp) {
   }
   fwSpecs(iface, withDhcp).forEach(function (sp) {
     sp.ports.forEach(function (port) {
-      var rule = '-i ' + iface + ' -p ' + sp.proto + ' --dport ' + port + ' -j ACCEPT';
+      var rule = '-i ' + iface.replace(/\*$/, '+') + ' -p ' + sp.proto + ' --dport ' + port + ' -j ACCEPT';
       if (sh('iptables -C INPUT ' + rule + ' 2>/dev/null').ok) return;
       if (sh('iptables -I INPUT ' + rule).ok) FW.rules.push({ kind: 'iptables', iface: iface, rule: rule });
       else FW.note = 'could not add a firewall rule (' + rule + ')';
@@ -247,6 +253,7 @@ function fwOpen(iface, withDhcp) {
   });
 }
 function fwCloseIface(iface) {
+  if (typeof wifiFwCache !== 'undefined') wifiFwCache.at = 0;
   if (fwKind() === 'nft') {
     var ch = nftInputChain();
     nftHandles(iface).forEach(function (h) { nft(['delete', 'rule'].concat(ch).concat(['handle', h])); });
@@ -257,29 +264,97 @@ function fwCloseIface(iface) {
     return false;
   });
 }
-// Read-only: is inbound traffic on this interface accepted for the bridge
-// ports? Looks for a catch-all drop / reject in the input chain (and the chains
-// it jumps to) that would apply to the interface and is not narrowed by a port
-// or address. A best-effort reading of the rules, shown as such.
+// ---- firewall verdict (read-only) ---------------------------------------------
+// Would a NEW connection from a phone on <iface> to <proto>/<port> be accepted?
+// A small ORDERED evaluator over the nft input chain, the way nftables walks
+// it: rules in order, `jump` evaluated inline (and returned from), `goto` not
+// returned from, first accept / drop / reject wins, else the chain policy.
+// A rule is taken to match only when every condition it has is one we can
+// decide for such a packet (interface, protocol, destination port, ct state
+// new); a rule that also needs a source address, source port, rate limit,
+// TCP flag combination or packet mark is treated as NOT matching - those never
+// describe a phone's fresh connection. Pure function: it reads rule TEXT, so it
+// is unit-tested against the real ruleset captured from the car.
+//   chains: { name: [line, ...] }, start: chain name, pkt: { iface, proto, port }
+function nftEvaluate(chains, start, pkt) {
+  function portIn(spec, port) {
+    spec = spec.replace(/[{}]/g, ' ');
+    var parts = spec.split(/[\s,]+/).filter(Boolean);
+    for (var i = 0; i < parts.length; i++) {
+      var r = /^(\d+)-(\d+)$/.exec(parts[i]);
+      if (r && port >= +r[1] && port <= +r[2]) return true;
+      if (+parts[i] === port) return true;
+    }
+    return false;
+  }
+  function ifIn(spec, iface) {
+    var names = spec.replace(/[{}"]/g, ' ').split(/[\s,]+/).filter(Boolean);
+    for (var i = 0; i < names.length; i++) {
+      var n = names[i];
+      if (n.slice(-1) === '*' ? iface.indexOf(n.slice(0, -1)) === 0 : n === iface) return true;
+    }
+    return false;
+  }
+  function matches(l) {
+    if (/\bct state\b/.test(l) && !/\bnew\b/.test(l)) return false;
+    if (/\bct status\b|\b[sd]addr\b|\bsport\b|limit rate|tcp flags|meta mark (&|==|!=)|\boifname\b|\bmeta (l4proto|nfproto)\b/.test(l)) return false;
+    var m = /\biifname\s+(\{[^}]*\}|"[^"]*"|\S+)/.exec(l);
+    if (m && !ifIn(m[1], pkt.iface)) return false;
+    m = /\bip protocol\s+(\{[^}]*\}|\S+)/.exec(l);
+    if (m && m[1].replace(/[{}]/g, ' ').split(/[\s,]+/).indexOf(pkt.proto) < 0) return false;
+    m = /\b(tcp|udp) dport\s+(\{[^}]*\}|\S+)/.exec(l);
+    if (m && (m[1] !== pkt.proto || !portIn(m[2], pkt.port))) return false;
+    return true;
+  }
+  function walk(name, depth) {
+    var lines = chains[name] || [];
+    for (var i = 0; i < lines.length; i++) {
+      var raw = lines[i].trim();
+      if (!raw || /^(table|chain|type|policy|\}|map|elements)\b/.test(raw)) continue;
+      // drop the parts that are statements, not conditions
+      var l = raw.replace(/comment\s+"[^"]*"/g, ' ').replace(/log prefix\s+"[^"]*"(\s+flags\s+\S+)?/g, ' ')
+        .replace(/\bcounter(\s+packets\s+\d+\s+bytes\s+\d+)?/g, ' ').replace(/meta mark set .*?(?=\b(accept|drop|reject|jump|goto)\b|$)/, ' ')
+        .replace(/#.*$/, ' ');
+      var j = /\b(jump|goto)\s+([A-Za-z0-9_-]+)/.exec(l), verdict = null;
+      if (!j) { var v = /\b(accept|drop|reject)\s*$/.exec(l.trim()); if (!v) continue; verdict = v[1]; }
+      var cond = l.replace(/\b(jump|goto)\s+\S+|\b(accept|drop|reject)\s*$/g, ' ');
+      if (!matches(cond)) continue;
+      if (verdict) return { verdict: verdict, rule: raw.replace(/\s*#.*$/, ''), chain: name };
+      if (depth > 6) continue;
+      var sub = walk(j[2], depth + 1);
+      if (sub) return sub;
+      if (j[1] === 'goto') return null;
+    }
+    return null;
+  }
+  var r = walk(start, 0);
+  if (r) return r;
+  var pol = /policy (\w+)/.exec((chains[start] || []).join('\n'));
+  return { verdict: pol ? pol[1] : 'accept', rule: 'chain policy', chain: start };
+}
+
+// Read the input chain and every chain it reaches, then ask nftEvaluate about
+// each bridge port. Returns { iface, ports: [{proto, port, verdict, rule}], blocked, opened }.
 function fwVerdict(iface) {
   if (fwKind() !== 'nft') return null;
   var ch = nftInputChain();
-  var main = nft(['list', 'chain'].concat(ch)); if (!main.ok) return null;
-  var text = main.out, jumps = [], m, re = /jump (\S+)/g;
-  while ((m = re.exec(main.out))) jumps.push(m[1]);
-  jumps.forEach(function (j) { var r = nft(['list', 'chain', ch[0], ch[1], j]); if (r.ok) text += '\n' + r.out; });
-  var ours = text.indexOf('"' + FW_TAG + '"') >= 0;
-  var policy = /policy (\w+)/.exec(main.out); policy = policy ? policy[1] : '?';
-  var blockers = text.split('\n').map(function (l) { return l.trim(); }).filter(function (l) {
-    if (!/\b(drop|reject)\b/.test(l) || /policy/.test(l)) return false;
-    if (/dport|sport|saddr|daddr|limit|flags/.test(l)) return false;     // narrowed: not a catch-all
-    var ifm = /iifname\s+"?([A-Za-z0-9_.*-]+)"?/.exec(l);
-    if (!ifm) return true;                                              // applies to every interface
-    var pat = ifm[1];
-    if (pat.slice(-1) === '*') return iface.indexOf(pat.slice(0, -1)) === 0;
-    return pat === iface;
+  var chains = {}, todo = [ch[2]], seen = {};
+  while (todo.length) {
+    var name = todo.shift(); if (seen[name]) continue; seen[name] = 1;
+    var r = nft(['list', 'chain', ch[0], ch[1], name]); if (!r.ok) continue;
+    chains[name] = r.out.split('\n');
+    var re = /\b(?:jump|goto)\s+([A-Za-z0-9_-]+)/g, m;
+    while ((m = re.exec(r.out))) if (!seen[m[1]]) todo.push(m[1]);
+  }
+  var ports = [];
+  TCP_PORTS.forEach(function (p) { ports.push({ proto: 'tcp', port: p }); });
+  UDP_PORTS.forEach(function (p) { ports.push({ proto: 'udp', port: p }); });
+  ports.forEach(function (pk) {
+    var v = nftEvaluate(chains, ch[2], { iface: iface, proto: pk.proto, port: pk.port });
+    pk.verdict = v.verdict; pk.rule = v.rule; pk.chain = v.chain;
   });
-  return { iface: iface, policy: policy, blockers: blockers, opened: ours };
+  var opened = (chains[ch[2]] || []).join('\n').indexOf('"' + FW_TAG + '"') >= 0;
+  return { iface: iface, ports: ports, blocked: ports.filter(function (x) { return x.verdict !== 'accept'; }), opened: opened };
 }
 
 // ---- access point ------------------------------------------------------------
@@ -463,12 +538,31 @@ function appSend(obj) {
   if (!appSock) return false;
   try { appSock.write(JSON.stringify(obj) + '\n'); return true; } catch (e) { return false; }
 }
+// What the car's firewall does to the bridge ports on each Wi-Fi interface,
+// for the app's bridge page. nft is read at most every 30 s.
+var wifiFwCache = { at: 0, val: null };
+function wifiFirewall() {
+  var now = Date.now();
+  if (wifiFwCache.val && now - wifiFwCache.at < 30000) return wifiFwCache.val;
+  var out = [];
+  try {
+    if (fwKind() === 'nft') {
+      ifaceList().filter(function (i) { return /^wl/.test(i.name) && i.address; }).forEach(function (w) {
+        var v = fwVerdict(w.name);
+        if (v) out.push({ iface: w.name, blocked: v.blocked.map(function (x) { return x.proto + '/' + x.port; }), opened: v.opened });
+      });
+    }
+  } catch (e) { /* never break status */ }
+  wifiFwCache = { at: now, val: out };
+  return out;
+}
+
 function stateMsg(id) {
   return {
     t: 'state', id: id, ok: true,
     ap: { up: AP.state === 'up', state: AP.state, error: AP.error, ssid: AP.ssid, pass: AP.pass, security: AP.security,
       channel: AP.channel, address: AP.address, iface: AP.iface, virtual: AP.virtual, reach: AP.reach },
-    firewall: { opened: FW.rules.length, note: FW.note, kind: FW.kind, ifaces: OPT.openIfaces },
+    firewall: { opened: FW.rules.length, note: FW.note, kind: FW.kind, ifaces: OPT.openIfaces, wifi: wifiFirewall() },
     stations: stations()
   };
 }
@@ -575,9 +669,9 @@ function probe() {
     wifis.forEach(function (w) {
       var v = fwVerdict(w.name);
       if (!v) return;
-      var verdict = v.opened ? 'OPEN (beem-bridge rules present)'
-        : (v.blockers.length ? 'BLOCKED by: ' + v.blockers[0] : (v.policy === 'accept' ? 'accepted (no catch-all drop found)' : 'policy ' + v.policy + ' - likely BLOCKED'));
-      log('   ' + w.name + ' (' + w.address + ')  bridge ports 6801/13400/6811: ' + verdict);
+      if (!v.blocked.length) { log('   ' + w.name + ' (' + w.address + ')  bridge ports: ALL ACCEPTED' + (v.opened ? ' (beem-bridge rules present)' : '')); return; }
+      log('   ' + w.name + ' (' + w.address + ')  bridge ports BLOCKED: ' + v.blocked.map(function (x) { return x.proto + '/' + x.port; }).join(' ') +
+        '   <- ' + v.blocked[0].rule + ' (chain ' + v.blocked[0].chain + ')');
     });
     log('   full input chain:');
     var full = nft(['list', 'chain'].concat(FW.chain));
@@ -629,6 +723,16 @@ function shutdown(code) {
 function main() {
   if (OPT.probe) { probe(); return; }
   if (OPT.status) { askStatus(); return; }
+  if (OPT.fwCheck) {
+    // exit 0 = the bridge ports are accepted on every Wi-Fi interface, 2 = blocked somewhere
+    var bad = 0;
+    wifiFirewall().forEach(function (w) {
+      log(w.iface + ': ' + (w.blocked.length ? 'BLOCKED ' + w.blocked.join(' ') : 'bridge ports accepted') + (w.opened ? ' (beem-bridge rules present)' : ''));
+      if (w.blocked.length) bad = 1;
+    });
+    process.exit(bad ? 2 : 0);
+    return;
+  }
   log('starting (pid ' + process.pid + ', node ' + process.version + ') - no Wi-Fi is broadcast until the app asks');
   try { fs.mkdirSync(OPT.runDir, 0x1ed); } catch (e) {}
   try { fs.chmodSync(OPT.runDir, 0x1ed); } catch (e) {}
@@ -671,6 +775,6 @@ if (require.main === module) main();
 module.exports = {
   genPass: genPass, cleanText: cleanText, cleanIface: cleanIface, onAppLine: onAppLine, stateMsg: stateMsg,
   apCapability: apCapability, iwDevs: iwDevs, AP: AP, OPT: OPT, FW: FW, TCP_PORTS: TCP_PORTS, UDP_PORTS: UDP_PORTS,
-  fwOpen: fwOpen, fwCloseIface: fwCloseIface, fwVerdict: fwVerdict,
+  fwOpen: fwOpen, fwCloseIface: fwCloseIface, fwVerdict: fwVerdict, nftEvaluate: nftEvaluate,
   _setAppSock: function (s) { appSock = s; }
 };

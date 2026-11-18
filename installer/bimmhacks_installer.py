@@ -31,7 +31,7 @@ it. Stage C (App Store) needs internet at the car (or a prepared USB stick).
 """
 import argparse, hashlib, json, os, queue, re, shutil, stat, subprocess, sys, tempfile, threading, time
 
-VERSION = '1.16.0'
+VERSION = '1.17.0'
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 DEFAULT_IP = '169.254.36.47'                # the unit's address with the idrive7-8-ssh-root tool
@@ -807,6 +807,21 @@ def do_beem(action, ssh, ip, key, log=print, **opts):
             log('Read the "firewall (read-only)" lines above: the head unit filters its Wi-Fi with an')
             log('allow-list, so if the bridge ports read BLOCKED, that open-iface install is what opens')
             log('them (from BeeM-Flash v2.30 this works on nftables units, where it used to do nothing).')
+        if action == 'car-probe' and 'Phase B' in out and '>>> REACHED' not in out:
+            log('')
+            log('RESULT: the phone never reached the head unit - in EITHER phase. Phase B had a temporary')
+            log('accept rule in place, so the firewall is NOT what is stopping it, and the test listener')
+            log('bound fine (it would have said otherwise). That means the wireless path itself carries')
+            log('nothing - client isolation on that Wi-Fi is the leading explanation.')
+            log('Before settling on that, do the cheap check: install with "wifi" in the "open car-Wi-Fi')
+            log('iface" field. From BeeM-Flash v2.31 the install reads the car\'s firewall properly and')
+            log('says outright if the bridge ports are dropped - the earlier "accepted" reading was wrong.')
+            log('If the tool still cannot connect after that, it is the wireless path. What does work')
+            log('then: join the CAR to an ordinary Wi-Fi router / travel router with client')
+            log('(AP) isolation turned OFF, put the tool on that same network, and point it at the car\'s')
+            log('address on that interface. Re-run this probe there to confirm before trusting it.')
+            log('Also check the phone stayed on that Wi-Fi - iOS drops to cellular when it says')
+            log('"No Internet Connection", and then nothing reaches 172.x at all.')
         if action == 'car-probe' and re.search(r'6801\s+NOT listening', out):
             log('')
             log('NOTE: the car\'s BeeM-Flash APP is not listening on TCP 6801 (HSFZ/ENET) - that is the port')
@@ -815,6 +830,11 @@ def do_beem(action, ssh, ip, key, log=print, **opts):
             log('turn BRIDGE: ON, then run this probe again. The helper here cannot provide that listener.')
         if action == 'install':
             why = []
+            if 'firewall DROPS the bridge ports' in out:
+                log('')
+                log('NOTE: the car\'s own firewall is DROPPING the bridge ports on Wi-Fi - MHD / E-Sys /')
+                log('ISTA cannot reach the car until that is opened. Put "wifi" in the "open car-Wi-Fi')
+                log('iface" field and install again (that covers the car\'s Wi-Fi and a phone hotspot).')
             if 'no hostapd/iw' in out and not opts.get('open_iface'):
                 log('')
                 log('NOTE: this unit cannot host its own Wi-Fi AND you installed with an empty "open car-Wi-Fi')
@@ -1742,9 +1762,9 @@ def run_gui():
             if action == 'probe':
                 ifs = beem_wifi_ifaces(out)
                 if ifs and not bridge_openif.get().strip():
-                    ui_set(bridge_openif, ifs)
-                    log('Filled "open car-Wi-Fi iface" with %s - install again to open the bridge ports '
-                        'there.' % ifs)
+                    ui_set(bridge_openif, 'wifi')
+                    log('Filled "open car-Wi-Fi iface" with "wifi" (every Wi-Fi interface - here %s). '
+                        'Install again to open the bridge ports there.' % ifs)
         start(w, done)
 
     br1 = row(c4, pady=(10, 4))

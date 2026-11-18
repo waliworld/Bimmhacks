@@ -8,9 +8,11 @@
 # Options for an install:
 #   --app-uid N        uid the BeeM-Flash app runs as (default 12261; shown on the
 #                      app's SETUP > DIAG page, line P8 "uid ...")
-#   --open-iface LIST  also open the bridge ports in the firewall on these existing
-#                      interfaces, comma-separated (e.g. wlan_bridge = the car's own
-#                      Wi-Fi). Use only if a phone on the car's Wi-Fi cannot reach it.
+#   --open-iface LIST  open the bridge ports (tcp 6801/13400, udp 6811/13400) in the
+#                      firewall on these interfaces, comma-separated. "wifi" = every
+#                      Wi-Fi interface: the car's own Wi-Fi (wlan_bridge) AND a phone
+#                      hotspot the car joins (wlan1). BMW units drop unknown ports on
+#                      Wi-Fi, so tools need this. Removed again when the helper stops.
 #   --channel N        fix the Wi-Fi channel (default: follow the car's own Wi-Fi)
 #   --take-iface       allow taking over the Wi-Fi radio if it cannot run a separate
 #                      access point (drops the car's own Wi-Fi / CarPlay while on)
@@ -142,6 +144,18 @@ fi
 echo " status : sh install.sh --status"
 echo " remove : sh uninstall.sh"
 echo "=================================================================="
+# Does the car's firewall let tools reach the bridge on Wi-Fi?
+FWOUT="$("$NODE" "$DIR/beem-bridged.js" --fw-check 2>&1)"; FWRC=$?
+if [ -n "$FWOUT" ]; then
+  echo
+  echo "Car firewall, bridge ports on Wi-Fi:"
+  echo "$FWOUT" | sed 's/^\[beem-bridged\] /  /'
+  if [ "$FWRC" = "2" ]; then
+    echo
+    echo "!! The car's firewall DROPS the bridge ports on Wi-Fi - MHD / ENET tools cannot connect."
+    echo "!! Re-run the install with:   sh install.sh --open-iface wifi"
+  fi
+fi
 # What the helper can actually do on THIS unit
 if ! command -v hostapd >/dev/null 2>&1 || ! command -v iw >/dev/null 2>&1; then
   echo

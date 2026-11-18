@@ -42,6 +42,20 @@ case "$cmd" in
             echo "   -> anything BLOCKED: install with  --open-iface wlan_bridge,wlan1"
             echo "NOTE: this head unit has no hostapd/iw, so it cannot host its own Wi-Fi network:"
         fi
+        if [ -n "${NEVER_REACHED:-}" ]; then
+            echo "Phase A (45 s): the firewall as it is now."
+            echo "Phase B (45 s): a TEMPORARY accept rule for port 47001 is in place."
+            echo "(temporary rule removed)"
+        fi
+        if [ -n "${REACHED:-}" ]; then
+            echo "Phase A (45 s): the firewall as it is now."
+            echo "  >>> REACHED via wlan1 from 172.20.10.1"
+            echo "Phase B (45 s): a TEMPORARY accept rule for port 47001 is in place."
+        fi
+        if [ -n "${FW_DROPS:-}" ]; then
+            echo "!! The car's firewall DROPS the bridge ports on Wi-Fi - MHD / ENET tools cannot connect."
+            echo "!! Re-run the install with:   sh install.sh --open-iface wifi"
+        fi
         if [ -n "${NO_6801:-}" ]; then
             echo "  tcp 6801  NOT listening - HSFZ/ENET (MHD, E-Sys, ISTA)"
             echo "  tcp 13400  listening   - DoIP"
@@ -177,6 +191,32 @@ class BridgeDeploy(unittest.TestCase):
         # and it does NOT warn when the field was filled in
         lines2 = self.run_beem('install', open_iface='wlan_bridge')[2]
         self.assertNotIn('not doing anything here yet', '\n'.join(lines2))
+
+    def test_car_probe_calls_it_when_the_phone_never_reached(self):
+        os.environ['NEVER_REACHED'] = '1'
+        self.addCleanup(os.environ.pop, 'NEVER_REACHED', None)
+        _, _, lines = self.run_beem('car-probe')
+        text = '\n'.join(lines)
+        self.assertIn('never reached the head unit', text)
+        self.assertIn('firewall is NOT what is stopping it', text)
+        self.assertIn('isolation turned OFF', text)
+
+    def test_car_probe_stays_quiet_when_the_phone_did_reach(self):
+        os.environ['REACHED'] = '1'
+        self.addCleanup(os.environ.pop, 'REACHED', None)
+        _, _, lines = self.run_beem('car-probe')
+        self.assertNotIn('never reached the head unit', '\n'.join(lines))
+
+    def test_install_surfaces_the_firewall_drop_check(self):
+        os.environ['FW_DROPS'] = '1'
+        self.addCleanup(os.environ.pop, 'FW_DROPS', None)
+        _, _, lines = self.run_beem('install', open_iface='wlan_bridge')
+        text = '\n'.join(lines)
+        self.assertIn('DROPPING the bridge ports', text)
+        self.assertIn('"wifi"', text)
+
+    def test_wifi_keyword_is_accepted_as_an_open_iface(self):
+        self.assertEqual(bi._beem_install_args(open_iface='wifi'), ' --open-iface wifi')
 
     def test_uninstall_only_sends_uninstall(self):
         code, cmds, _ = self.run_beem('uninstall')
