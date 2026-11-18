@@ -67,8 +67,8 @@ This project bundles three upstream repositories, each copied unchanged except w
 ## 6. `tools/beem-flash/` — the BeeM-Flash wireless bridge helper
 
 - **Repository:** https://github.com/waliworld/BeeM-Flash
-- **Commit:** `bc83a1e` (v2.29.0 — "helper installs on this head unit"). Was `7f8bc99` (v2.28.0), and
-  `3d09482` before that.
+- **Commit:** `3ce950d` (v2.30.0 — nftables firewall support, a working reachability probe). Was
+  `bc83a1e` (v2.29.0), `7f8bc99` (v2.28.0) and `3d09482`.
 - **Licence:** MIT (TunedByWali) — `tools/beem-flash/LICENSE`, with `NOTICE.md`.
 - Only the bridge tooling is vendored, not the full BeeM-Flash app: `beem-bridge/` (the root daemon
   `beem-bridged.js`, its systemd unit, `install.sh` / `uninstall.sh`, `INSTALL.md`, `README.md`),
@@ -87,6 +87,13 @@ This project bundles three upstream repositories, each copied unchanged except w
   `--status` now tries **every** socket path (a daemon that could only create `/dev/shm` used to look
   dead), and the daemon **ignores `SIGHUP`** so a background start survives the SSH session. The probe
   also now reads the iptables/nft INPUT policy, which is what decides whether `--open-iface` is needed.
+- **v2.30.0 matters for MGU head units:** they filter inbound traffic with **nftables** (table `ip
+  filter`, chain `input`) and the Wi-Fi interface is an **allow-list** (CarPlay 7000, Android Auto 7612,
+  ...). Before v2.30 `--open-iface` only knew iptables and simply noted "nftables in use - not modified",
+  so on such a unit it opened **nothing**. It now inserts rules at the top of the input chain, tagged with
+  the comment `beem-bridge`, removes them again by handle, and calls `nft` through `execFileSync` (no
+  shell, so no value is shell-interpreted). The probe now prints a per-interface verdict for the bridge
+  ports (OPEN / BLOCKED by <rule> / accepted) and the full input chain.
 - The bridge is **OFF by default**: the helper never talks to the car (the app does, every request
   approved on the car's screen), and it broadcasts nothing until the owner turns on WI-FI: OWN from the
   app. The installer only deploys the helper and runs its probes. Everything here is for the owner's own

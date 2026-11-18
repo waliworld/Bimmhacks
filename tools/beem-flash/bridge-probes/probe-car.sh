@@ -1,70 +1,107 @@
 #!/bin/sh
-# probe-car.sh — settle the make-or-break unknowns for the BeeM-Flash wireless
-# bridge. Run as ROOT on the head unit (SSH or serial). READ-ONLY except for one
-# temporary listening socket and (optionally) one temporary firewall rule, both
-# removed before it exits. It sends NOTHING to the car. Safe to run with the
-# engine off and the car parked.
+# probe-car.sh - why can (or can't) a phone tool reach the BeeM-Flash bridge?
+# Run as ROOT on the head unit. It sends NOTHING to the car. Read-only except a
+# throwaway test listener (port 47001) and, in phase B only, one temporary
+# firewall rule tagged "beem-probe" - both removed before it exits.
 #
-# It answers two questions the repos cannot:
-#   P2  what network interfaces/routes/firewall the head unit has
-#   P3  whether a phone on the hotspot can reach a listener on the head unit
+#   P2  network: Wi-Fi interfaces, routes, the firewall's input chain (complete)
+#   P2b is the app's bridge actually listening (TCP 6801/13400, UDP 6811/13400)?
+#   P3  can a PHONE reach the head unit on each Wi-Fi interface?
+#       Phase A: as the firewall is now.  Phase B: with a temporary accept rule.
+#       On the phone you only open an address in Safari / Chrome.
 #
-# Usage:  sh probe-car.sh            # P2 + P3 (listener test)
-#         PORT=13400 sh probe-car.sh
+# Usage:  sh probe-car.sh              (P3 phases: 45 s each)
+#         SECS=60 sh probe-car.sh
 set -u
-PORT="${PORT:-13400}"
+TPORT=47001
+SECS="${SECS:-45}"
 echo "=================================================================="
-echo " BeeM-Flash bridge probe  —  read-only, sends nothing to the car"
+echo " BeeM-Flash bridge probe  -  sends nothing to the car"
 echo "=================================================================="
 
-echo; echo "### P2: network topology ###"
-echo "--- interfaces (look for wlan0 = phone hotspot, and socnet0 = car) ---"
-ip -br addr 2>/dev/null || ifconfig -a 2>/dev/null
-echo "--- routes ---";       ip route 2>/dev/null
-echo "--- policy rules ---"; ip rule 2>/dev/null
-echo "--- listening TCP ports already open ---"; ss -ltnp 2>/dev/null || netstat -ltnp 2>/dev/null
-echo "--- firewall (default policy decides if an inbound rule is needed) ---"
-nft list ruleset 2>/dev/null | head -40 || iptables -S 2>/dev/null || echo "(no nft/iptables visible)"
+echo; echo "### P2: network ###"
+echo "--- Wi-Fi interfaces with an address ---"
+WIFIS=""
+for IF in $(ls /sys/class/net 2>/dev/null); do
+  case "$IF" in wl*) ;; *) continue ;; esac
+  A="$(ip -4 -o addr show "$IF" 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -1)"
+  [ -n "$A" ] || continue
+  if [ "$IF" = "wlan_bridge" ]; then ROLE="the car's own Wi-Fi (DIRECT-BMW / CarPlay)"; else ROLE="car joined another network (e.g. your phone's hotspot)"; fi
+  echo "  $IF  $A   $ROLE"
+  WIFIS="$WIFIS $IF:$A"
+done
+[ -n "$WIFIS" ] || echo "  (none - join the car to Wi-Fi or connect the phone to the car first)"
+echo "--- routes ---"; ip route 2>/dev/null | grep -v " via " ; echo "  (+ $(ip route 2>/dev/null | grep -c ' via ') routed hosts not shown)"
 
-# Find the hotspot address to bind to (wlan0 preferred).
-WIP="$(ip -4 -o addr show wlan0 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -1)"
-echo; echo "wlan0 IPv4 address: ${WIP:-<none found>}"
-
-echo; echo "### P3: can a phone on the hotspot reach a listener here? ###"
-if [ -z "$WIP" ]; then
-  echo "No wlan0 address — connect your phone's hotspot (or the HU to the phone"
-  echo "hotspot) so wlan0 gets an address, then re-run. Skipping the listener test."
+# the chain that has "hook input"
+CH=""
+for T in "ip filter input" "inet filter input" "ip filter INPUT"; do
+  if nft list chain $T 2>/dev/null | grep -q "hook input"; then CH="$T"; break; fi
+done
+echo "--- firewall input chain (complete) ---"
+if [ -n "$CH" ]; then
+  nft list chain $CH
+  for J in $(nft list chain $CH 2>/dev/null | sed -n 's/.*jump \([A-Za-z0-9_]*\).*/\1/p'); do
+    echo "--- jumped-to chain: $J ---"
+    nft list chain $(echo "$CH" | cut -d' ' -f1-2) "$J" 2>/dev/null
+  done
 else
-  echo "Binding a throwaway TCP listener on ${WIP}:${PORT} for 60 seconds."
-  echo ">>> On your PHONE (same hotspot), open a terminal / a TCP app and run:"
-  echo ">>>     nc ${WIP} ${PORT}      (then type something and press enter)"
-  echo ">>> If text arrives below, inbound Wi-Fi reachability is PROVEN."
-  echo
-  # Try to add a scoped accept rule if nft is present (removed afterwards).
-  RULE_ADDED=0
-  if command nft >/dev/null 2>&1 && nft list ruleset >/dev/null 2>&1; then
-    if nft add rule inet filter input iifname "wlan0" tcp dport ${PORT} accept 2>/dev/null; then
-      RULE_ADDED=1; echo "(added a temporary nft accept rule for wlan0 tcp/${PORT})"
-    fi
+  iptables -S INPUT 2>/dev/null || echo "(no readable nft input chain or iptables)"
+fi
+
+echo; echo "### P2b: is the BeeM-Flash bridge listening? (turn BRIDGE: ON first) ###"
+L="$(netstat -ltnup 2>/dev/null || ss -ltnup 2>/dev/null)"
+for P in "tcp 6801 HSFZ/ENET (MHD, E-Sys, ISTA)" "tcp 13400 DoIP" "udp 6811 HSFZ discovery" "udp 13400 DoIP discovery"; do
+  set -- $P; PROTO=$1; PN=$2; shift 2
+  if echo "$L" | grep -E "^$PROTO" | grep -qE "[:.]$PN[[:space:]]"; then echo "  $PROTO $PN  listening   - $*"
+  else echo "  $PROTO $PN  NOT listening - $*"; fi
+done
+echo "  (if 6801 is NOT listening: update BeeM-Flash to v2.30.0+ and turn the bridge on)"
+
+echo; echo "### P3: can the phone reach the head unit? ###"
+if [ -z "$WIFIS" ]; then
+  echo "No Wi-Fi interface has an address - skipping."
+else
+  echo "Put the PHONE on the same Wi-Fi as the head unit, then open in Safari / Chrome:"
+  for W in $WIFIS; do echo "      http://${W#*:}:$TPORT/      (via ${W%%:*})"; done
+  echo "A page saying 'BeeM-Flash probe: reached' means that path works."
+  node -e "
+    var n=require('net'),ifs=process.argv.slice(1);
+    ifs.forEach(function(w){var ip=w.split(':')[1],name=w.split(':')[0];
+      n.createServer(function(s){console.log('  >>> REACHED via '+name+' from '+String(s.remoteAddress).replace('::ffff:',''));
+        s.end('HTTP/1.0 200 OK\r\nContent-Type: text/plain\r\n\r\nBeeM-Flash probe: reached the head unit via '+name+'\n');})
+      .on('error',function(e){console.log('  (cannot listen on '+ip+':$TPORT: '+e.code+')');}).listen($TPORT,ip);});
+    setTimeout(function(){process.exit(0);},(2*$SECS+5)*1000);" $WIFIS &
+  NPID=$!
+  echo; echo "Phase A ($SECS s): the firewall as it is now. Open the address(es) on the phone now."
+  sleep "$SECS"
+  ADDED=""
+  if [ -n "$CH" ]; then
+    for W in $WIFIS; do
+      nft insert rule $CH iifname "\"${W%%:*}\"" tcp dport $TPORT accept comment '"beem-probe"' 2>/dev/null && ADDED=1
+    done
   fi
-  # Prefer nc; fall back to a tiny node listener.
-  if command nc >/dev/null 2>&1; then
-    ( nc -l -p ${PORT} -s "${WIP}" 2>/dev/null || nc -l "${WIP}" ${PORT} 2>/dev/null ) &
-    LPID=$!
-  elif command node >/dev/null 2>&1; then
-    node -e "var n=require('net');n.createServer(function(s){s.on('data',function(d){process.stdout.write('[phone->HU] '+d);s.write('ok from head unit\n');});}).listen(${PORT},'${WIP}',function(){});setTimeout(function(){process.exit(0);},60000);" &
-    LPID=$!
+  if [ -n "$ADDED" ]; then
+    echo; echo "Phase B ($SECS s): a TEMPORARY accept rule for port $TPORT is in place. Reload the page(s) now."
   else
-    echo "Neither nc nor node found to open a listener."; LPID=
+    echo; echo "Phase B ($SECS s): no firewall rule could be added; reload anyway."
   fi
-  [ -n "${LPID:-}" ] && { sleep 60; kill "$LPID" 2>/dev/null; }
-  [ "$RULE_ADDED" = 1 ] && nft delete rule inet filter input iifname "wlan0" tcp dport ${PORT} accept 2>/dev/null && echo "(removed the temporary nft rule)"
+  sleep "$SECS"
+  kill "$NPID" 2>/dev/null
+  if [ -n "$CH" ]; then
+    for H in $(nft -a list chain $CH 2>/dev/null | grep '"beem-probe"' | sed -n 's/.*# handle \([0-9]*\).*/\1/p'); do
+      nft delete rule $CH handle "$H" 2>/dev/null
+    done
+    nft list chain $CH 2>/dev/null | grep -q '"beem-probe"' && echo "WARNING: a beem-probe rule is still present" || echo "(temporary rule removed)"
+  fi
 fi
 
 echo; echo "=================================================================="
-echo " INTERPRETATION"
-echo "  P3 text arrived          -> inbound reachable. Bridge leg is GO."
-echo "  arrived only WITH the nft rule -> reachable, firewall insert needed."
-echo "  nothing arrived either way -> AP client-isolation or no inbound path."
-echo "       Try USB tether instead, or the bridge can't be wireless on this unit."
+echo " READING THE RESULT"
+echo "  REACHED in phase A     -> nothing blocks that path. If a tool still fails, the"
+echo "                            app must be listening on 6801/13400 (see P2b)."
+echo "  REACHED only in phase B -> the firewall blocks it: install the helper with"
+echo "                            --open-iface <that interface> (e.g. wlan_bridge)."
+echo "  never REACHED          -> the Wi-Fi isolates devices (or the phone is on another"
+echo "                            network): try the other path (phone hotspot <-> car Wi-Fi)."
 echo "=================================================================="

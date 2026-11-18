@@ -76,11 +76,33 @@ It prints what this head unit can do. Look for these lines:
 | `tool iw:` / `tool ip:` | `present` | Required. |
 | `tool iptables:` | `present` | Needed only if a firewall blocks the ports. |
 | `wireless (iw dev):` | your interfaces and their channel | Note the channel: the helper uses the same one. |
-| `firewall (read-only):` | `iptables INPUT policy: ACCEPT`, no DROP/REJECT for `wlan…` | A DROP policy or rules on `wlan_bridge` mean the firewall blocks tools on the car's Wi-Fi. Install with `--open-iface wlan_bridge` (§5). |
+| `firewall (read-only):` | one line per Wi-Fi interface: `accepted` or `OPEN` | `BLOCKED by: …` means the firewall drops tool traffic on that interface. Install with `--open-iface <that interface>` (§5). BMW units use **nftables**; the helper adds its rules there (tagged `beem-bridge`, removed when it stops). |
 
 **Send me a photo of this output if anything is MISSING or NO.**
 
 ---
+
+### 3b. Can the phone reach the head unit at all? (2 minutes, recommended)
+
+`tools/bridge-probes/probe-car.sh` answers that directly. Copy it to the head unit and
+run it as root with the phone on the same Wi-Fi as the car:
+
+```bash
+sh probe-car.sh
+```
+
+It prints the complete firewall input chain, whether the app's bridge is listening on
+**6801 / 13400 / 6811** (turn BRIDGE: ON first), and an address for each Wi-Fi
+interface (e.g. `http://172.16.222.97:47001/`). Open that address in **Safari** on
+the phone twice: once in phase A (the firewall as it is), then reload in phase B (with a
+temporary allow rule, removed afterwards). The page says **"BeeM-Flash probe: reached"**
+when that path works:
+
+| Result | Meaning |
+|---|---|
+| reached in phase A | Nothing blocks that path. |
+| reached only in phase B | The firewall blocks it → install with `--open-iface <interface>`. |
+| never reached | The Wi-Fi keeps devices apart, or the phone is on another network → try the other path (phone hotspot ↔ car Wi-Fi). |
 
 ## 4. Find the app's user id (one number)
 

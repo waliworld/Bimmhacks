@@ -272,6 +272,7 @@ re-install the Store, run the installer again. Coding backups are kept in `codin
 | *A valid 17-character VIN is needed* | Click **Detect VIN**, or type the VIN from the windshield. |
 | *MainApp … a version the patch does not know* | This firmware isn't supported yet. Nothing was changed. Contact us. |
 | *Could not log in to the head unit* | Do **Root access** first, or *Browse* to the right `id_rsa`. Check the IP and that the car is awake. |
+| A setting (e.g. **Wi-Fi**) turns itself off again after the car sleeps | A head-unit setting that will not persist is the classic sign of **incomplete coding after a flash** — the flash wipes the CAFD coding, and a whole-blob restore can leave settings resetting. Re-code **HU_MGU by vehicle order ("code by FA" / VO coding)** in E-Sys or BimmerCode; that is the documented fix. The wireless-bridge helper is **not** the cause on a unit without `hostapd`/`iw` — it never touches the radio there. |
 | Coding restore says *do not match* / *refusing* | The car's CAFD versions or VIN differ from the backup — it will not write. Make sure it is the same car/unit, or restore with E-Sys/Autel from the saved `.ncd` files. |
 | App Store step fails to download | The **car** needs internet (USB Ethernet / LTE / tethered phone / Wi-Fi). |
 | *'cryptography' could not be installed* | Run `python -m pip install --user cryptography`, then retry. |

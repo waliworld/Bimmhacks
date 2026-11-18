@@ -169,28 +169,117 @@ function genPass() {
 }
 
 // ---- firewall ----------------------------------------------------------------
-var FW = { rules: [], note: null };
-function fwTool() { return has('iptables') ? 'iptables' : null; }
-function fwOpen(iface) {
-  var ipt = fwTool();
-  if (!ipt) { FW.note = has('nft') ? 'nftables in use - not modified' : 'no iptables (nothing to open)'; return; }
-  var specs = [];
-  TCP_PORTS.forEach(function (p) { specs.push('-i ' + iface + ' -p tcp --dport ' + p + ' -j ACCEPT'); });
-  UDP_PORTS.forEach(function (p) { specs.push('-i ' + iface + ' -p udp --dport ' + p + ' -j ACCEPT'); });
-  specs.push('-i ' + iface + ' -p udp --dport 67 -j ACCEPT');          // DHCP for the phone
-  specs.forEach(function (rule) {
-    if (sh(ipt + ' -C INPUT ' + rule + ' 2>/dev/null').ok) return;   // already present (ours or the unit's)
-    if (sh(ipt + ' -I INPUT ' + rule).ok) FW.rules.push(rule);
-    else FW.note = 'could not add a firewall rule (' + rule + ')';
+// BMW head units filter inbound traffic with nftables (table "ip filter", chain
+// "input"; on the test car iptables is not even readable). The Wi-Fi interface
+// there is an ALLOW-LIST - CarPlay 7000, Android Auto 7612, ... - so the bridge
+// ports have to be added. Rules are INSERTED at the top of the input chain (an
+// appended rule would sit behind a catch-all drop and never match), tagged with
+// the comment "beem-bridge", and removed again by handle. nft is called without
+// a shell (execFileSync), so no value is ever shell-interpreted. iptables is the
+// fallback for units that use it.
+var FW = { rules: [], note: null, kind: null, chain: null };
+var FW_TAG = 'beem-bridge';
+
+function nft(args) {
+  try { return { ok: true, out: String(cp.execFileSync('nft', args, { stdio: ['ignore', 'pipe', 'pipe'], timeout: 8000 })) }; }
+  catch (e) { return { ok: false, out: String((e && (e.stderr || e.message)) || e) }; }
+}
+// The chain that has "hook input": try the usual names, family ip first.
+function nftInputChain() {
+  if (FW.chain) return FW.chain;
+  var tries = [['ip', 'filter', 'input'], ['inet', 'filter', 'input'], ['ip', 'filter', 'INPUT'], ['inet', 'fw4', 'input']];
+  for (var i = 0; i < tries.length; i++) {
+    var r = nft(['list', 'chain'].concat(tries[i]));
+    if (r.ok && /hook input/.test(r.out)) { FW.chain = tries[i]; return FW.chain; }
+  }
+  return null;
+}
+function fwKind() {
+  if (FW.kind) return FW.kind;
+  if (has('nft') && nftInputChain()) FW.kind = 'nft';
+  else if (has('iptables') && sh('iptables -S INPUT 2>/dev/null').ok) FW.kind = 'iptables';
+  else FW.kind = 'none';
+  return FW.kind;
+}
+function fwSpecs(iface, withDhcp) {
+  var out = [
+    { proto: 'tcp', ports: TCP_PORTS.slice(0) },
+    { proto: 'udp', ports: UDP_PORTS.slice(0) }
+  ];
+  if (withDhcp) out.push({ proto: 'udp', ports: [67] });
+  return out.map(function (x) { x.iface = iface; return x; });
+}
+function nftHandles(iface) {
+  var ch = nftInputChain(); if (!ch) return [];
+  var r = nft(['-a', 'list', 'chain'].concat(ch)); if (!r.ok) return [];
+  var out = [];
+  r.out.split('\n').forEach(function (ln) {
+    if (ln.indexOf('"' + FW_TAG + '"') < 0) return;
+    if (iface && ln.indexOf('"' + iface + '"') < 0 && ln.indexOf(' ' + iface + ' ') < 0) return;
+    var m = /# handle (\d+)/.exec(ln); if (m) out.push(m[1]);
+  });
+  return out;
+}
+function fwOpen(iface, withDhcp) {
+  var kind = fwKind();
+  if (kind === 'none') { FW.note = 'no usable firewall tool (nothing opened)'; return; }
+  if (kind === 'nft') {
+    if (nftHandles(iface).length) { FW.note = null; return; }            // already open (idempotent)
+    var ch = nftInputChain();
+    fwSpecs(iface, withDhcp).forEach(function (sp) {
+      var args = ['insert', 'rule'].concat(ch).concat(['iifname', '"' + iface + '"', sp.proto, 'dport']);
+      if (sp.ports.length === 1) args.push(String(sp.ports[0]));
+      else args = args.concat(['{', sp.ports.join(', '), '}']);
+      args = args.concat(['accept', 'comment', '"' + FW_TAG + '"']);
+      var r = nft(args);
+      if (r.ok) FW.rules.push({ kind: 'nft', iface: iface });
+      else FW.note = 'could not add an nft rule on ' + iface + ': ' + r.out.trim().slice(0, 120);
+    });
+    return;
+  }
+  fwSpecs(iface, withDhcp).forEach(function (sp) {
+    sp.ports.forEach(function (port) {
+      var rule = '-i ' + iface + ' -p ' + sp.proto + ' --dport ' + port + ' -j ACCEPT';
+      if (sh('iptables -C INPUT ' + rule + ' 2>/dev/null').ok) return;
+      if (sh('iptables -I INPUT ' + rule).ok) FW.rules.push({ kind: 'iptables', iface: iface, rule: rule });
+      else FW.note = 'could not add a firewall rule (' + rule + ')';
+    });
   });
 }
 function fwCloseIface(iface) {
-  var ipt = fwTool(); if (!ipt) return;
-  FW.rules = FW.rules.filter(function (rule) {
-    if (rule.indexOf('-i ' + iface + ' ') !== 0) return true;
-    sh(ipt + ' -D INPUT ' + rule);
+  if (fwKind() === 'nft') {
+    var ch = nftInputChain();
+    nftHandles(iface).forEach(function (h) { nft(['delete', 'rule'].concat(ch).concat(['handle', h])); });
+  }
+  FW.rules = FW.rules.filter(function (r) {
+    if (r.iface !== iface) return true;
+    if (r.kind === 'iptables') sh('iptables -D INPUT ' + r.rule);
     return false;
   });
+}
+// Read-only: is inbound traffic on this interface accepted for the bridge
+// ports? Looks for a catch-all drop / reject in the input chain (and the chains
+// it jumps to) that would apply to the interface and is not narrowed by a port
+// or address. A best-effort reading of the rules, shown as such.
+function fwVerdict(iface) {
+  if (fwKind() !== 'nft') return null;
+  var ch = nftInputChain();
+  var main = nft(['list', 'chain'].concat(ch)); if (!main.ok) return null;
+  var text = main.out, jumps = [], m, re = /jump (\S+)/g;
+  while ((m = re.exec(main.out))) jumps.push(m[1]);
+  jumps.forEach(function (j) { var r = nft(['list', 'chain', ch[0], ch[1], j]); if (r.ok) text += '\n' + r.out; });
+  var ours = text.indexOf('"' + FW_TAG + '"') >= 0;
+  var policy = /policy (\w+)/.exec(main.out); policy = policy ? policy[1] : '?';
+  var blockers = text.split('\n').map(function (l) { return l.trim(); }).filter(function (l) {
+    if (!/\b(drop|reject)\b/.test(l) || /policy/.test(l)) return false;
+    if (/dport|sport|saddr|daddr|limit|flags/.test(l)) return false;     // narrowed: not a catch-all
+    var ifm = /iifname\s+"?([A-Za-z0-9_.*-]+)"?/.exec(l);
+    if (!ifm) return true;                                              // applies to every interface
+    var pat = ifm[1];
+    if (pat.slice(-1) === '*') return iface.indexOf(pat.slice(0, -1)) === 0;
+    return pat === iface;
+  });
+  return { iface: iface, policy: policy, blockers: blockers, opened: ours };
 }
 
 // ---- access point ------------------------------------------------------------
@@ -306,7 +395,7 @@ function apStart(cb) {
       log('dnsmasq not present: give the phone a static address ' + AP.address.replace(/\.\d+$/, '.50') + '/24');
     }
     // 5) firewall for the bridge ports on this network only
-    fwOpen(iface);
+    fwOpen(iface, true);
     AP.state = 'up'; AP.since = Date.now();
     log('AP up: "' + AP.ssid + '" on ' + iface + (AP.virtual ? ' (virtual, next to ' + phys + ')' : ' (took over ' + phys + ')') +
       ' ch ' + AP.channel + ' at ' + AP.address);
@@ -379,7 +468,7 @@ function stateMsg(id) {
     t: 'state', id: id, ok: true,
     ap: { up: AP.state === 'up', state: AP.state, error: AP.error, ssid: AP.ssid, pass: AP.pass, security: AP.security,
       channel: AP.channel, address: AP.address, iface: AP.iface, virtual: AP.virtual, reach: AP.reach },
-    firewall: { opened: FW.rules.length, note: FW.note },
+    firewall: { opened: FW.rules.length, note: FW.note, kind: FW.kind, ifaces: OPT.openIfaces },
     stations: stations()
   };
 }
@@ -478,24 +567,25 @@ function probe() {
   log('interface combinations:  ' + (cap.combos || 'not reported'));
   log('  -> a separate AP next to the car\'s Wi-Fi needs a combination that allows AP alongside the current mode(s)');
   ['hostapd', 'dnsmasq', 'iw', 'ip', 'iptables', 'nft'].forEach(function (b) { log('tool ' + b + ': ' + (has(b) ? 'present' : 'MISSING')); });
-  // Firewall, read-only: does the unit drop inbound traffic on its Wi-Fi? If so,
-  // a tool's discovery (UDP 6811/13400) and connection (TCP 6801/13400) never
-  // reach the app, and --open-iface <wifi iface> is the fix.
-  log('firewall (read-only):');
-  var ipt = sh('iptables -S INPUT 2>/dev/null');
-  if (ipt.ok) {
-    var lines = ipt.out.split('\n').filter(Boolean);
-    var pol = lines.filter(function (l) { return /^-P INPUT/.test(l); })[0] || '-P INPUT ?';
-    log('   iptables INPUT policy: ' + pol.replace('-P INPUT ', '') + '   (' + (lines.length - 1) + ' rules)');
-    lines.filter(function (l) { return /wlan|6801|6811|13400|REJECT|DROP/.test(l); }).slice(0, 12)
-      .forEach(function (l) { log('     ' + l); });
-  } else log('   iptables: not readable');
-  var nft = sh('nft list ruleset 2>/dev/null');
-  if (nft.ok && nft.out.trim()) {
-    var hooks = nft.out.split('\n').filter(function (l) { return /hook input|policy drop|wlan|6801|6811|13400/.test(l); });
-    log('   nftables: ' + (hooks.length ? '' : 'no input hook / drop policy / wlan rules found'));
-    hooks.slice(0, 12).forEach(function (l) { log('     ' + l.trim()); });
-  } else log('   nftables: empty or not readable');
+  // Firewall, read-only: would a tool's traffic on each Wi-Fi interface (the
+  // car's own Wi-Fi and a phone hotspot the car joined) reach the app?
+  log('firewall (read-only): ' + fwKind() + (FW.chain ? ' chain ' + FW.chain.join(' ') : ''));
+  var wifis = ifaceList().filter(function (i) { return /^wl/.test(i.name) && i.address; });
+  if (fwKind() === 'nft') {
+    wifis.forEach(function (w) {
+      var v = fwVerdict(w.name);
+      if (!v) return;
+      var verdict = v.opened ? 'OPEN (beem-bridge rules present)'
+        : (v.blockers.length ? 'BLOCKED by: ' + v.blockers[0] : (v.policy === 'accept' ? 'accepted (no catch-all drop found)' : 'policy ' + v.policy + ' - likely BLOCKED'));
+      log('   ' + w.name + ' (' + w.address + ')  bridge ports 6801/13400/6811: ' + verdict);
+    });
+    log('   full input chain:');
+    var full = nft(['list', 'chain'].concat(FW.chain));
+    (full.ok ? full.out.split('\n') : []).forEach(function (l) { if (l.trim()) log('     ' + l.trim()); });
+    log('   -> anything BLOCKED: install with  --open-iface ' + (wifis.map(function (w) { return w.name; }).join(',') || 'wlan_bridge'));
+  } else if (fwKind() === 'iptables') {
+    sh('iptables -S INPUT 2>/dev/null').out.split('\n').filter(Boolean).forEach(function (l) { log('     ' + l); });
+  } else log('   no firewall tool readable');
   var other = sh('pgrep -a hostapd 2>/dev/null');
   log('hostapd already running: ' + (other.ok && other.out.trim() ? other.out.trim().replace(/\n/g, ' | ') : 'no'));
   log('node: ' + process.version + '   socket(s): ' + OPT.socks.join(', '));
@@ -556,7 +646,10 @@ function main() {
 
   // Optional: open the bridge ports on the car's own Wi-Fi as well (the
   // DIRECT-BMW network), for when its firewall is what stops a phone.
-  OPT.openIfaces.map(cleanIface).filter(Boolean).forEach(function (i) { fwOpen(i); log('firewall opened on ' + i); });
+  OPT.openIfaces.map(cleanIface).filter(Boolean).forEach(function (i) {
+    fwOpen(i, false);
+    log((FW.note ? 'firewall NOT opened on ' + i + ': ' + FW.note : 'firewall opened on ' + i + ' (' + fwKind() + ': tcp ' + TCP_PORTS.join('/') + ', udp ' + UDP_PORTS.join('/') + ')'));
+  });
 
   // Bring the network down when nobody needs it; the daemon itself stays up.
   ticker = setInterval(function () {
@@ -578,5 +671,6 @@ if (require.main === module) main();
 module.exports = {
   genPass: genPass, cleanText: cleanText, cleanIface: cleanIface, onAppLine: onAppLine, stateMsg: stateMsg,
   apCapability: apCapability, iwDevs: iwDevs, AP: AP, OPT: OPT, FW: FW, TCP_PORTS: TCP_PORTS, UDP_PORTS: UDP_PORTS,
+  fwOpen: fwOpen, fwCloseIface: fwCloseIface, fwVerdict: fwVerdict,
   _setAppSock: function (s) { appSock = s; }
 };

@@ -31,7 +31,7 @@ it. Stage C (App Store) needs internet at the car (or a prepared USB stick).
 """
 import argparse, hashlib, json, os, queue, re, shutil, stat, subprocess, sys, tempfile, threading, time
 
-VERSION = '1.14.0'
+VERSION = '1.15.0'
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 DEFAULT_IP = '169.254.36.47'                # the unit's address with the idrive7-8-ssh-root tool
@@ -798,6 +798,9 @@ def do_beem(action, ssh, ip, key, log=print, **opts):
             log('installed. The bridge still works on a network the car is ALREADY on: install with the')
             log('"open car-Wi-Fi iface" field set to the car\'s Wi-Fi interface (wlan_bridge above), then')
             log('join that network from the phone - or join the car to your phone\'s hotspot instead.')
+            log('Read the "firewall (read-only)" lines above: the head unit filters its Wi-Fi with an')
+            log('allow-list, so if the bridge ports read BLOCKED, that open-iface install is what opens')
+            log('them (from BeeM-Flash v2.30 this works on nftables units, where it used to do nothing).')
         if action == 'install':
             why = []
             if ('read-only /etc' in out or '/etc is read-only' in out
