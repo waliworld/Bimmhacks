@@ -689,12 +689,23 @@ def do_store_install(node, ip, key, no_renderer=False, no_uplink=False, log=prin
     if no_uplink:
         argv.append('--no-uplink')
     p = popen_noinput(argv, cwd=STORE_DIR, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    coding_msg = ''
     for raw in iter(p.stdout.readline, b''):
         line = raw.decode('utf-8', 'replace').rstrip('\r\n')
         log('  store> ' + line)
+        if 'coding is missing' in line:
+            coding_msg = line.strip()
     p.stdout.close()
     code = p.wait()
     if code == 2:
+        if coding_msg:
+            # The install refuses while the head unit's coding is wiped/default -
+            # normal right after a flash. Surface the real reason + fix, not the generic wording.
+            raise InstallerError(
+                coding_msg + '\n\n'
+                'Root worked and the head unit answered - this is only the coding. Re-code HU_MGU by '
+                'vehicle order ("code by FA" / VO coding) in E-Sys or BimmerCode (or restore the saved '
+                '.ncd), restart the head unit, then run App Store install again.')
         raise InstallerError('The App Store installer refused the request or the usage was wrong (see above).')
     if code:
         raise InstallerError('The App Store install failed (exit %d; see above).' % code)

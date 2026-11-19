@@ -211,6 +211,33 @@ class RestartTests(unittest.TestCase):
         self.assertEqual(len(self.restarts_sent()), 1)
         self.assertTrue(any('The head unit is back' in l for l in self.lines), self.lines[-4:])
 
+    def test_store_install_exit2_surfaces_coding_fix(self):
+        """exit 2 (checkCoding refused) shows the real coding reason + the code-by-FA fix,
+        not the generic 'refused the request or the usage was wrong'."""
+        out = (b"connecting to 127.0.0.1:22 as given\n"
+               b"The head unit's coding is missing: it holds default values. This often happens "
+               b"after enabling SSH or flashing. Restore the head unit's coding from a backup "
+               b"(BimmerCode, E-Sys or ISTA) or have HU_MGU coded to the car, restart the head "
+               b"unit, then run the install again.\n")
+
+        class Proc(object):
+            stdout = BytesIO(out)
+            stdin = BytesIO()
+
+            @staticmethod
+            def wait():
+                return 2
+        real = bi.popen_noinput
+        bi.popen_noinput = lambda argv, **k: Proc
+        self.addCleanup(setattr, bi, 'popen_noinput', real)
+        with self.assertRaises(bi.InstallerError) as cm:
+            bi.do_store_install('node', '127.0.0.1', self.key, log=self.lines.append)
+        msg = str(cm.exception)
+        self.assertIn('coding is missing', msg)
+        self.assertIn('default values', msg)
+        self.assertIn('code by FA', msg)
+        self.assertNotIn('usage was wrong', msg)
+
     def patch_fast_wait(self):
         real = bi.wait_for_restart
         bi.wait_for_restart = lambda car, log=print, **k: real(car, log, **dict(k, **FAST))
