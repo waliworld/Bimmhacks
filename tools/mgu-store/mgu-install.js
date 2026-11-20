@@ -6,7 +6,7 @@
  * no dependencies: Node 18 or newer and the system's OpenSSH client, on
  * Windows, macOS or Linux (deploy/README.md, "mgu-install").
  *
- *   node mgu-install.js first-install [--from <folder>] [--no-renderer] [--no-uplink] [--token] [--no-restart-prompt] [<ssh options>]
+ *   node mgu-install.js first-install [--from <folder>] [--no-renderer] [--no-uplink] [--token] [--no-restart-prompt] [--force-coding] [<ssh options>]
  *   node mgu-install.js token [--list [--json] | --remove <id>] [<ssh options>]
  *   node mgu-install.js usb-repo <stick folder> [<input>...]
  *
@@ -20,7 +20,10 @@
  * installed components are kept; running it again is safe. --token adds a
  * GitHub token for the updater afterwards. When the head unit needs a
  * restart to finish, it asks at a terminal whether to restart it now
- * (not under CI, nor with --no-restart-prompt).
+ * (not under CI, nor with --no-restart-prompt). --force-coding installs
+ * even when the coding check does not pass (LOCAL PATCH, see UPSTREAM.md):
+ * only for a unit whose coding is already restored and working but whose
+ * coding store the check misreads (e.g. an older base MGU).
  *
  * first-install --from <folder> installs from a folder usb-repo wrote
  * (<folder>/mgu-repo/mgu-store) instead of GitHub, each file checked
@@ -829,8 +832,7 @@ const CODING_CHECK = '/usr/bin/node -e \'var fs = require(`fs`), b = null, f, wh
     ' var manager = why && fs.readdirSync(`/proc`).some(function (p) {' +
     ' var a; try { a = fs.readFileSync(`/proc/` + p + `/cmdline`, `utf8`).split(nul); } catch (e) { return false; }' +
     ' return (a[0] === `node` || a[0].slice(-5) === `/node`) && a.slice(1).some(function (s) {' +
-    ' return [`oap-mainapp/src/main.js`, `oap-mainapp/src/main.bundle.js`, `oap-mainapp21/src/main.js`, `oap-mainapp21/src/main.bundle.js`]' +
-    '.some(function (m) { return s.slice(-m.length - 1) === `/` + m; }); }); });' +
+    ' return s.indexOf(`oap-mainapp`) >= 0 && s.indexOf(`/src/main`) >= 0 && s.slice(-3) === `.js`; }); });' +
     ' console.log(why && !manager ? why : `ok`);\'';
 
 const CODING_MISSING = {
@@ -886,8 +888,13 @@ async function firstInstall(o) {
     const label = from || STORE_REPO;
     const token = o.token ? await readToken('GitHub token for the updater (input hidden): ') : null;
     await reach(o);
-    if (!checkCoding(o)) {
+    const codingOk = checkCoding(o);
+    if (!codingOk && !o.forceCoding) {
         return 2;
+    }
+    if (!codingOk) {
+        say('Continuing anyway (--force-coding): the coding check did not pass. Only do this if the coding ' +
+            'is already restored and the car works - if the app manager cannot start, the Store will not run.');
     }
     const { components } = local || await githubComponents(await githubRepo(STORE_REPO, token));
     const wanted = WITH.filter((w) => !o[w.skip]);
@@ -1361,7 +1368,7 @@ const USAGE = SOURCE === null ? 'usage: deploy/README.md, "mgu-install"' : SOURC
 
 function parse(argv) {
     const o = { command: argv[0], host: null, port: '22', bind: null, given: false, user: 'root', identity: null, sshOpts: [],
-        noRenderer: false, noUplink: false, token: false, noRestartPrompt: false, list: false, json: false, remove: null, from: null, rest: [] };
+        noRenderer: false, noUplink: false, token: false, noRestartPrompt: false, forceCoding: false, list: false, json: false, remove: null, from: null, rest: [] };
     const value = (i, flag) => {
         if (i >= argv.length) {
             throw new Usage(`${flag} needs a value`);
@@ -1379,6 +1386,7 @@ function parse(argv) {
         else if (a === '--no-uplink' && o.command === 'first-install') o.noUplink = true;
         else if (a === '--token' && o.command === 'first-install') o.token = true;
         else if (a === '--no-restart-prompt' && o.command === 'first-install') o.noRestartPrompt = true;
+        else if (a === '--force-coding' && o.command === 'first-install') o.forceCoding = true;
         else if (a === '--from' && o.command === 'first-install') o.from = value(++i, a);
         else if (a === '--list' && o.command === 'token') o.list = true;
         else if (a === '--json' && o.command === 'token') o.json = true;

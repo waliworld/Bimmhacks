@@ -48,6 +48,17 @@ This project bundles three upstream repositories, each copied unchanged except w
   it as `node mgu-install.js first-install …`, and it downloads the Store's components from the
   mgu-store GitHub releases at install time. The vendored file keeps its GPL header and is invoked
   as a separate process (arm's-length aggregation), not linked into the Python installer.
+- **Local patches (base-unit coding support):** two small, GPL-licensed changes, marked in the file so
+  they can be re-applied if the vendored file is updated:
+  1. A `--force-coding` option on `first-install` (arg parser + the `checkCoding` gate in `firstInstall`,
+     and the usage header). Upstream aborts the install (exit 2) whenever the on-unit coding check reports
+     `default`/`invalid`; that check reads `/dev/shm/rawcodingdata` byte `0x28` with offsets derived from
+     the newer verified units, so an older/base MGU with valid restored coding can be misread and refused.
+     `--force-coding` lets the install proceed anyway.
+  2. `CODING_CHECK`'s "is the app manager running?" escape hatch was broadened from a hard-coded list of
+     MainApp paths (`oap-mainapp/src/main.js`, `oap-mainapp21/...`) to any node process whose cmdline
+     contains `oap-mainapp` and `/src/main` and ends `.js`, so a base unit whose MainApp lives under a
+     different `oap_<uid>` dir is still recognised and the check prints `ok` instead of falsely refusing.
 
 ## 4. idrive-apps (robertnisipeanu/idrive-apps) — not vendored
 

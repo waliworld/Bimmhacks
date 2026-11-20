@@ -211,14 +211,12 @@ class RestartTests(unittest.TestCase):
         self.assertEqual(len(self.restarts_sent()), 1)
         self.assertTrue(any('The head unit is back' in l for l in self.lines), self.lines[-4:])
 
-    def test_store_install_exit2_surfaces_coding_fix(self):
-        """exit 2 (checkCoding refused) shows the real coding reason + the code-by-FA fix,
-        not the generic 'refused the request or the usage was wrong'."""
-        out = (b"connecting to 127.0.0.1:22 as given\n"
-               b"The head unit's coding is missing: it holds default values. This often happens "
-               b"after enabling SSH or flashing. Restore the head unit's coding from a backup "
-               b"(BimmerCode, E-Sys or ISTA) or have HU_MGU coded to the car, restart the head "
-               b"unit, then run the install again.\n")
+    def fake_exit2(self, coding=True):
+        """first-install stood in for: refuses with exit 2. coding=True includes checkCoding's
+        'coding is missing' line (the sentinel); coding=False is a usage/other exit-2."""
+        out = b"connecting to 127.0.0.1:22 as given\n"
+        if coding:
+            out += b"The head unit's coding is missing: it holds default values. ... run the install again.\n"
 
         class Proc(object):
             stdout = BytesIO(out)
@@ -228,15 +226,68 @@ class RestartTests(unittest.TestCase):
             def wait():
                 return 2
         real = bi.popen_noinput
-        bi.popen_noinput = lambda argv, **k: Proc
+        bi.popen_noinput = lambda argv, **k: (self.argv_seen.__setitem__('argv', argv), Proc)[1]
         self.addCleanup(setattr, bi, 'popen_noinput', real)
+
+    def setUpArgv(self):
+        if not hasattr(self, 'argv_seen'):
+            self.argv_seen = {}
+
+    def test_store_install_exit2_no_ssh_generic_verdict(self):
+        """exit 2 with no ssh -> generic coding verdict (restore + Install anyway), never the old
+        'refused the request or the usage was wrong'."""
+        self.setUpArgv()
+        self.fake_exit2()
         with self.assertRaises(bi.InstallerError) as cm:
             bi.do_store_install('node', '127.0.0.1', self.key, log=self.lines.append)
         msg = str(cm.exception)
-        self.assertIn('coding is missing', msg)
-        self.assertIn('default values', msg)
         self.assertIn('code by FA', msg)
+        self.assertIn('Install anyway', msg)
         self.assertNotIn('usage was wrong', msg)
+
+    def test_store_install_exit2_with_ssh_runs_diagnostic(self):
+        """exit 2 with ssh -> diagnose_coding runs and the verdict reflects the probe result."""
+        self.setUpArgv()
+        self.fake_exit2()
+        probe = {'len': 4144, 'flag': 2, 'header_valid': True, 'default_bits': True,
+                 'mainapp': False, 'oapcontroller': True, 'why': 'default'}
+        real = bi.diagnose_coding
+        bi.diagnose_coding = lambda ssh, ip, key, log=print: probe
+        self.addCleanup(setattr, bi, 'diagnose_coding', real)
+        with self.assertRaises(bi.InstallerError) as cm:
+            bi.do_store_install('node', '127.0.0.1', self.key, log=self.lines.append, ssh='ssh')
+        self.assertEqual(str(cm.exception), bi.coding_verdict_message(probe))
+        self.assertIn('power cycle', str(cm.exception))
+
+    def test_store_install_exit2_without_coding_line_is_generic(self):
+        """exit 2 with NO 'coding is missing' line (a usage / deploy-too-old error) must NOT run the
+        coding diagnostic or claim a coding problem - exit 2 is overloaded in mgu-install.js."""
+        self.setUpArgv()
+        self.fake_exit2(coding=False)
+        called = []
+        real = bi.diagnose_coding
+        bi.diagnose_coding = lambda *a, **k: called.append(1)
+        self.addCleanup(setattr, bi, 'diagnose_coding', real)
+        with self.assertRaises(bi.InstallerError) as cm:
+            bi.do_store_install('node', '127.0.0.1', self.key, log=self.lines.append, ssh='ssh')
+        self.assertEqual(called, [], 'diagnostic must not run for a non-coding exit 2')
+        self.assertIn('usage was wrong', str(cm.exception))
+        self.assertNotIn('code by FA', str(cm.exception))
+
+    def test_force_coding_passes_flag(self):
+        """force_coding -> --force-coding in the argv; exit 0 then succeeds without a coding verdict."""
+        self.setUpArgv()
+        seen = self.fake_first_install()
+        bi.do_store_install('node', '127.0.0.1', self.key, log=self.lines.append, force_coding=True)
+        self.assertIn('--force-coding', seen['argv'])
+
+    def test_coding_verdict_message_classifies(self):
+        m = bi.coding_verdict_message
+        self.assertIn('Install anyway', m(None))
+        self.assertIn('not the usual 0x1030', m({'why': 'unreadable', 'len': 100, 'mainapp': False}))
+        self.assertIn('power cycle', m({'why': 'default', 'mainapp': False}))
+        self.assertIn('false alarm', m({'why': 'invalid', 'mainapp': True}))
+        self.assertIn('restart', m({'why': 'ok'}).lower())
 
     def patch_fast_wait(self):
         real = bi.wait_for_restart

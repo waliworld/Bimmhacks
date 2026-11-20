@@ -31,7 +31,7 @@ it. Stage C (App Store) needs internet at the car (or a prepared USB stick).
 """
 import argparse, hashlib, json, os, queue, re, shutil, stat, subprocess, sys, tempfile, threading, time
 
-VERSION = '1.19.0'
+VERSION = '1.20.0'
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 DEFAULT_IP = '169.254.36.47'                # the unit's address with the idrive7-8-ssh-root tool
@@ -665,12 +665,88 @@ def do_restart_head_unit(ip, key, log=print, wait=True, **timing):
 
 # -------------------------------------------------------------- stage C: the App Store (mgu-store)
 
-def do_store_install(node, ip, key, no_renderer=False, no_uplink=False, log=print, from_dir=None, restart=False):
+# Reads the same coding state mgu-install.js's own check does (/dev/shm/rawcodingdata, 0x1030 bytes,
+# status flags in byte 0x28: bit 0x08 header-valid, bits 0x02/0x04 default), plus whether the app
+# manager (MainApp) and oapcontroller run, and prints one JSON line. It tells a REAL wiped-coding
+# state apart from a base-unit false alarm (a coding store the check misreads). JS strings use
+# backticks so the remote shell's single quotes pass them through, exactly like CODING_CHECK upstream.
+CODING_PROBE = (
+    "/usr/bin/node -e '"
+    "var fs=require(`fs`),b=null;"
+    "try{b=fs.readFileSync(`/dev/shm/rawcodingdata`)}catch(e){}"
+    "var len=b?b.length:-1,f=(b&&b.length>0x28)?b[0x28]:-1,nul=String.fromCharCode(0);"
+    "var main=false,oapc=false;"
+    "try{fs.readdirSync(`/proc`).forEach(function(p){var a;"
+    "try{a=fs.readFileSync(`/proc/`+p+`/cmdline`,`utf8`).split(nul)}catch(e){return}"
+    # loose MainApp match: any node process running oap-mainapp*/src/main*.js, so a base unit's
+    # MainApp (which may live under a different oap_<uid> dir than the verified units) still counts
+    "if((a[0]===`node`||a[0].slice(-5)===`/node`)&&a.slice(1).some(function(s){"
+    "return s.indexOf(`oap-mainapp`)>=0&&s.indexOf(`/src/main`)>=0&&s.slice(-3)===`.js`}))main=true;"
+    "if(a.join(` `).indexOf(`oapcontroller`)>=0)oapc=true})}catch(e){}"
+    "var why=(len===0x1030)?(!(f&8)?`invalid`:(f&6)?`default`:`ok`):`unreadable`;"
+    "console.log(`CODINGPROBE `+JSON.stringify({len:len,flag:f,"
+    "header_valid:f>=0?!!(f&8):null,default_bits:f>=0?!!(f&6):null,"
+    "mainapp:main,oapcontroller:oapc,why:why}))'"
+)
+
+
+def diagnose_coding(ssh, ip, key, log=print):
+    """SSH in and read the real coding state. -> dict (len, flag, header_valid, default_bits,
+    mainapp, oapcontroller, why) or None if it could not be read. Logs a one-line readout."""
+    car = Car(ssh, ip, key, log=log)
+    try:
+        _, out = car.run(CODING_PROBE, echo=False)
+    finally:
+        car.close()
+    m = re.search(r'CODINGPROBE (\{.*\})', out)
+    if not m:
+        log('Could not read the coding state from the head unit:')
+        log((out or '').strip())
+        return None
+    d = json.loads(m.group(1))
+    log('Coding diagnostic: rawcodingdata=%s bytes, flag byte 0x28=%s (header_valid=%s, default=%s), '
+        'MainApp running=%s, oapcontroller running=%s -> coding reads as "%s".'
+        % (d['len'], d['flag'], d['header_valid'], d['default_bits'], d['mainapp'], d['oapcontroller'], d['why']))
+    return d
+
+
+def coding_verdict_message(d):
+    """Turn a diagnose_coding() result into clear guidance for the exit-2 refusal."""
+    force = 'use "Install anyway (coding already restored)"'
+    if d is None:
+        return ('The App Store install was refused by the coding check, and the coding state could not be read. '
+                'Restore the coding (code by FA / .ncd), restart the head unit, then try again; or %s if the car '
+                'works normally.' % force)
+    why = d.get('why')
+    if why == 'ok':
+        return ('The coding now reads as valid, but the install still refused - restart the head unit and try '
+                'again; if it persists, %s.' % force)
+    if why == 'unreadable':
+        return ('The head unit\'s coding store is not in the format the check expects (it is %s bytes, not the '
+                'usual 0x1030) - typical of an older / base MGU. If the car screen shows its normal entertainment '
+                'sources and widgets, the coding is fine and this is a false alarm: %s.' % (d.get('len'), force))
+    # invalid / default
+    if not d.get('mainapp'):
+        return ('The coding reads as "%s" and the app manager (MainApp) is not running. The most likely cause is '
+                'that the car was coded but the head unit was not FULLY restarted - the check reads an in-memory '
+                'copy that only refreshes on a real power cycle. Do a full power cycle (ignition off and on, or '
+                'hold the volume knob ~30s) - NOT just the soft "Restart head unit" button, which may not refresh '
+                'it - then run the install again. If you have ALREADY power-cycled and the screen shows '
+                'entertainment sources and widgets normally, this is a base-unit false alarm: %s.' % (why, force))
+    return ('The coding reads as "%s" but MainApp is running, so this is most likely a false alarm: %s.'
+            % (why, force))
+
+
+def do_store_install(node, ip, key, no_renderer=False, no_uplink=False, log=print, from_dir=None,
+                     restart=False, force_coding=False, ssh=None):
     """Install the on-car MGU App Store with the bundled mgu-install.js.
 
     from_dir: a folder `usb-repo` staged earlier (it holds mgu-repo/mgu-store): the Store package is
     taken from there instead of GitHub, so this machine needs no internet (the Pocket box).
-    restart: then restart the head unit and wait for it - the Store only starts after a restart."""
+    restart: then restart the head unit and wait for it - the Store only starts after a restart.
+    force_coding: pass --force-coding, so the install proceeds even if the coding check does not pass
+    (for a base unit whose coding is restored and working but whose coding store the check misreads).
+    ssh: the OpenSSH client path; when given, a coding refusal is diagnosed over SSH for a clear verdict."""
     if not os.path.isfile(STORE_JS):
         raise InstallerError('The App Store installer is missing (expected it in %s).' % STORE_DIR)
     if not key or not os.path.isfile(key):
@@ -680,6 +756,8 @@ def do_store_install(node, ip, key, no_renderer=False, no_uplink=False, log=prin
     else:
         log('Installing the MGU App Store on the head unit (downloads the Store package; needs internet here) ...')
     argv = [node, STORE_JS, 'first-install', '--identity', key, '--no-restart-prompt']
+    if force_coding:
+        argv.append('--force-coding')
     if from_dir:
         argv += ['--from', from_dir]
     if ip:
@@ -689,23 +767,27 @@ def do_store_install(node, ip, key, no_renderer=False, no_uplink=False, log=prin
     if no_uplink:
         argv.append('--no-uplink')
     p = popen_noinput(argv, cwd=STORE_DIR, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-    coding_msg = ''
+    saw_coding_refusal = False
     for raw in iter(p.stdout.readline, b''):
         line = raw.decode('utf-8', 'replace').rstrip('\r\n')
         log('  store> ' + line)
         if 'coding is missing' in line:
-            coding_msg = line.strip()
+            saw_coding_refusal = True
     p.stdout.close()
     code = p.wait()
+    # Exit 2 is overloaded in mgu-install.js (coding refusal, but also a usage error or a too-old deploy
+    # tool), so only treat it as coding when checkCoding actually printed its "coding is missing" line.
+    if code == 2 and saw_coding_refusal and not force_coding:
+        # Root already worked and the head unit answered - diagnose the real coding state so the user
+        # knows restore-and-restart vs a base-unit false alarm, and can use "Install anyway" if it is false.
+        log('The install was refused by the coding check. Reading the head unit\'s coding state ...')
+        d = diagnose_coding(ssh, ip, key, log) if ssh else None
+        raise InstallerError(coding_verdict_message(d))
+    if code == 2 and saw_coding_refusal:
+        # force_coding was on, so the coding gate was skipped: a 2 after that is the on-unit install step.
+        raise InstallerError('The on-unit install step refused (exit 2) even with the coding check forced. '
+                             'See the log above - the coding may genuinely be stopping the app manager.')
     if code == 2:
-        if coding_msg:
-            # The install refuses while the head unit's coding is wiped/default -
-            # normal right after a flash. Surface the real reason + fix, not the generic wording.
-            raise InstallerError(
-                coding_msg + '\n\n'
-                'Root worked and the head unit answered - this is only the coding. Re-code HU_MGU by '
-                'vehicle order ("code by FA" / VO coding) in E-Sys or BimmerCode (or restore the saved '
-                '.ncd), restart the head unit, then run App Store install again.')
         raise InstallerError('The App Store installer refused the request or the usage was wrong (see above).')
     if code:
         raise InstallerError('The App Store install failed (exit %d; see above).' % code)
@@ -1034,7 +1116,7 @@ def do_install_apps_source(node, ip, key, repo, label, stage_dir=None, log=print
     try:
         if not store_present(car):
             log('The on-car Store is not installed yet - installing it first ...')
-            do_store_install(node, ip, key, log=log, from_dir=from_dir, restart=restart_store)
+            do_store_install(node, ip, key, log=log, from_dir=from_dir, restart=restart_store, ssh=ssh)
             restarted = restart_store
         if repo.lower() in BUILTIN_SOURCES:
             log('%s is a built-in Store source (%s): it is already in the car\'s Store. On the car open '
@@ -1667,9 +1749,31 @@ def run_gui():
                                       'The car needs internet for this.%s' % (ip, note)):
             return
         def w():
-            do_store_install(need_node(), ip, key, no_renderer=no_r, no_uplink=no_u, log=log, restart=rs)
+            do_store_install(need_node(), ip, key, no_renderer=no_r, no_uplink=no_u, log=log, restart=rs,
+                             ssh=need_ssh())
         start(w, 'App Store installed and the head unit restarted - open Apps > Store on the car.' if rs else
               'App Store installed. Press "Restart head unit" (or restart the car) so the Store can start.')
+
+    def on_diagnose():
+        _, key, ip, _ = conn_values()
+        start(lambda: diagnose_coding(need_ssh(), ip, key, log),
+              'Coding read - see the diagnostic line in the log above.')
+
+    def on_force_store():
+        _, key, ip, _ = conn_values()
+        no_r, no_u, rs = not renderer_var.get(), not uplink_var.get(), restart_var.get()
+        if not messagebox.askokcancel('Install anyway (coding already restored)',
+                                      'Only do this if you have ALREADY restored the car\'s coding (code by FA / '
+                                      '.ncd) and RESTARTED the head unit, and the car screen shows its normal '
+                                      'entertainment sources and widgets.\n\nThis skips the coding check, which an '
+                                      'older / base MGU can misread. If the coding is really missing the Store will '
+                                      'install but the app manager will not start.\n\nInstall the App Store now at '
+                                      '%s?' % ip):
+            return
+        def w():
+            do_store_install(need_node(), ip, key, no_renderer=no_r, no_uplink=no_u, log=log, restart=rs,
+                             force_coding=True, ssh=need_ssh())
+        start(w, 'App Store installed (coding check skipped). Press "Restart head unit" if it did not restart.')
 
     def on_restart():
         _, key, ip, _ = conn_values()
@@ -1681,8 +1785,14 @@ def run_gui():
     sr = row(c2, pady=(10, 4))
     button(sr, 'Test connection', on_test)
     button(sr, 'Install the App Store', on_store, style='Accent.TButton')
-    sr2 = row(c2, pady=(0, 12))
+    sr2 = row(c2, pady=(0, 2))
     button(sr2, 'Restart head unit', on_restart)
+    button(sr2, 'Diagnose coding', on_diagnose)
+    para(c2, 'If the install is refused for coding: restore the coding (code by FA / .ncd) and restart the head '
+             'unit, then install again. If it is already restored and the car works, "Diagnose coding" confirms '
+             'it and "Install anyway" skips a check an older / base unit can misread.', wrap=470)
+    sr3 = row(c2, pady=(2, 12))
+    button(sr3, 'Install anyway (coding already restored)', on_force_store)
 
     # ---- right: add sources to the car's Store ----------------------------------------------------
     c2b = card(r2c, pady=(0, 10), padx=(6, 22))
@@ -1970,6 +2080,9 @@ def main(argv=None):
     ap.add_argument('--stage', help='install-*-apps / usb-repo: stage the apps to this folder / USB for offline install')
     ap.add_argument('--no-renderer', action='store_true', help='store-install: leave out the renderer')
     ap.add_argument('--no-uplink', action='store_true', help='store-install: leave out the internet uplink')
+    ap.add_argument('--force-coding', action='store_true',
+                    help='store-install: install even if the coding check does not pass (only for a base unit '
+                         'whose coding is restored and working but whose coding store the check misreads)')
     ap.add_argument('--restart', action='store_true',
                     help='store-install / install-*: restart the head unit when the Store needs it (and wait for it)')
     ap.add_argument('--no-wait', action='store_true', help='restart-head-unit: do not wait for the unit to come back')
@@ -2050,7 +2163,8 @@ def main(argv=None):
             if not a.key:
                 ap.error('--key is needed')
             do_store_install(node, a.ip or ip_from_key(a.key) or DEFAULT_IP, a.key,
-                             no_renderer=a.no_renderer, no_uplink=a.no_uplink, log=log, restart=a.restart)
+                             no_renderer=a.no_renderer, no_uplink=a.no_uplink, log=log, restart=a.restart,
+                             force_coding=a.force_coding, ssh=ssh)
             return
         if a.action == 'restart-head-unit':
             if not a.key:
