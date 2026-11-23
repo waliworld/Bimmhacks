@@ -140,6 +140,14 @@ This project bundles three upstream repositories, each copied unchanged except w
 - `installer/pid_capture.py` reads a Wireshark capture (pcap / pcapng) of the ENET link, or a root-tool
   session log, and reports which diagnostic identifiers a logging tool asked the car for, writing a
   `custom_pids.json` skeleton for Bimmhacks Tuner. Offline; it never talks to the car.
+- `tools/mgu-check/mgu-check.js` is a first-party, read-only on-car diagnostic (from the MGU Styles
+  tooling, part of this project — not third-party): run over SSH it reports on MGU Styles, the phone map
+  on the cluster (Maps on cluster) and the cluster renderer, for the first drives of a release. It only
+  reads the unit (files + the renderer's status socket as a client that draws nothing), writes nothing,
+  and always exits 0 with a report (2 on a bad argument). The installer stages and runs it via
+  `do_mgu_check` (App Store tab button and the `mgu-check` CLI action); paths can be overridden with the
+  env vars `MGU_CHECK_SOCK` / `MGU_CHECK_WAZE` / `MGU_CHECK_OAP` / `MGU_CHECK_TOOLS`. Tests:
+  `installer/tests/test_mgu_check.py`.
 - `installer/tests/` holds a fake ENET gateway (`fake_enet.py`, which also answers the root tool's
   enrollment routines) and a fake `ssh` (`fake_ssh.sh`), with tests that drive the real coding-snapshot,
   VIN-detection and root-tool `status` code against them (`test_coding_backup.py`), the installer's safety

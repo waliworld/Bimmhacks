@@ -134,6 +134,10 @@ Unticked nothing restarts? Click **Restart head unit** next to the install butto
 It asks the car to restart exactly as the Store's own *Restart head unit* does, and refuses while a
 Store install is still running.
 
+**Check cluster / MGU Styles** (read-only) reports on **MGU Styles**, the **phone map on the cluster**
+and the **cluster renderer** — handy for the first drives after installing or updating those. It reads
+the car only (it changes nothing) and prints `OK` / `NO` verdict lines plus the details in the log.
+
 ### Add apps to the Store
 
 The right-hand card adds sources to the on-car Store:

@@ -31,7 +31,7 @@ it. Stage C (App Store) needs internet at the car (or a prepared USB stick).
 """
 import argparse, hashlib, json, os, queue, re, shutil, stat, subprocess, sys, tempfile, threading, time
 
-VERSION = '1.20.0'
+VERSION = '1.21.0'
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 DEFAULT_IP = '169.254.36.47'                # the unit's address with the idrive7-8-ssh-root tool
@@ -46,6 +46,8 @@ SSHROOT_ENROLL = os.path.join(SSHROOT_DIR, 'data', 'enrollments')
 STORE_DIR = os.environ.get('BIMMHACKS_STORE_DIR') or os.path.join(REPO, 'tools', 'mgu-store')
 STORE_JS = os.path.join(STORE_DIR, 'mgu-install.js')
 BEEM_DIR = os.environ.get('BIMMHACKS_BEEM_DIR') or os.path.join(REPO, 'tools', 'beem-flash')
+MGUCHECK_DIR = os.environ.get('BIMMHACKS_MGUCHECK_DIR') or os.path.join(REPO, 'tools', 'mgu-check')
+MGUCHECK_JS = os.path.join(MGUCHECK_DIR, 'mgu-check.js')
 # The Wireless Bridge tab is experimental and access-gated during testing: the tab is locked until the
 # tester enters the access code the owner gave them. Only the SHA-256 of the code is stored (never the
 # code itself), so reading the source does not reveal it. The owner changes the shared code with
@@ -807,6 +809,7 @@ def do_store_install(node, ip, key, no_renderer=False, no_uplink=False, log=prin
 # is OFF by default and consent-gated ON THE CAR; the installer only deploys the helper and runs its
 # read-only probes for testing / development. See tools/beem-flash/docs/BRIDGE.md.
 BEEM_REMOTE = '/var/opt/bimmhacks-beem'        # where the files are staged on the unit before install.sh
+MGUCHECK_REMOTE = '/var/opt/bimmhacks-check'    # where mgu-check.js is staged on the unit before it runs
 BRIDGE_DEFAULT_UID = '12261'                   # the BeeM-Flash app's default uid (car: SETUP > DIAG > P8)
 BEEM_BRIDGE_FILES = ['beem-bridged.js', 'beem-bridged.service', 'install.sh']
 # Read-only diagnostic for a helper that installed but does not answer. Busybox-safe (the unit's shell is
@@ -957,6 +960,36 @@ def do_beem(action, ssh, ip, key, log=print, **opts):
                                         else ' See the log above.'))
             for w in why:
                 log('NOTE: ' + w)
+        return code, out
+    finally:
+        car.close()
+
+
+def do_mgu_check(ssh, ip, key, log=print):
+    """Run the read-only on-car cluster / MGU Styles check (mgu-check.js) over SSH and show its report.
+    It only READS the head unit (its files, and the cluster renderer's status socket as a client that
+    draws nothing); it writes nothing on the car. From the MGU Styles session; see tools/mgu-check/.
+    -> (exit code, output)."""
+    if not os.path.isfile(MGUCHECK_JS):
+        raise InstallerError('The cluster check script is missing (expected %s).' % MGUCHECK_JS)
+    if not key or not os.path.isfile(key):
+        raise InstallerError('The car SSH key is needed. Do the root-access step first, or pick the key.')
+    car = Car(ssh, ip, key, log=log)
+    try:
+        test_connection(car, log)
+        log('Running the read-only cluster / MGU Styles check on the head unit (changes nothing) ...')
+        car.run('mkdir -p %s' % MGUCHECK_REMOTE, echo=False)
+        with open(MGUCHECK_JS, 'rb') as fh:
+            data = fh.read()
+        code, _ = car.run('cat > %s/mgu-check.js' % MGUCHECK_REMOTE, stdin_data=data, echo=False)
+        if code:
+            raise InstallerError('Could not copy the check to the head unit (exit %d).' % code)
+        code, out = car.run('cd %s && /usr/bin/node mgu-check.js' % MGUCHECK_REMOTE)
+        if code == 2:
+            raise InstallerError('The cluster check rejected its arguments (exit 2) - this is a bug; send the log.')
+        if code:
+            raise InstallerError('The cluster check could not run on the head unit (exit %d; see above). '
+                                 'It needs a rooted MGU with Node.' % code)
         return code, out
     finally:
         car.close()
@@ -1782,6 +1815,11 @@ def run_gui():
                                       'driving.' % ip):
             return
         start(lambda: do_restart_head_unit(ip, key, log=log), 'The head unit restarted.')
+
+    def on_mgu_check():
+        _, key, ip, _ = conn_values()
+        start(lambda: do_mgu_check(need_ssh(), ip, key, log),
+              'Cluster / MGU Styles check done - read the OK / NO verdict lines in the log above.')
     sr = row(c2, pady=(10, 4))
     button(sr, 'Test connection', on_test)
     button(sr, 'Install the App Store', on_store, style='Accent.TButton')
@@ -1791,8 +1829,12 @@ def run_gui():
     para(c2, 'If the install is refused for coding: restore the coding (code by FA / .ncd) and restart the head '
              'unit, then install again. If it is already restored and the car works, "Diagnose coding" confirms '
              'it and "Install anyway" skips a check an older / base unit can misread.', wrap=470)
-    sr3 = row(c2, pady=(2, 12))
+    sr3 = row(c2, pady=(2, 4))
     button(sr3, 'Install anyway (coding already restored)', on_force_store)
+    para(c2, 'Cluster check (read-only): reports MGU Styles, the phone map on the cluster and the cluster '
+             'renderer - for the first drives of a new release. Changes nothing on the car.', wrap=470)
+    sr4 = row(c2, pady=(2, 12))
+    button(sr4, 'Check cluster / MGU Styles', on_mgu_check)
 
     # ---- right: add sources to the car's Store ----------------------------------------------------
     c2b = card(r2c, pady=(0, 10), padx=(6, 22))
@@ -2057,7 +2099,7 @@ def main(argv=None):
                              'root-enter-prog', 'root-exit-prog',
                              'detect-vin', 'base-identity', 'base-root',
                              'backup-coding', 'preflight-coding', 'verify-coding', 'restore-coding',
-                             'test', 'store-install', 'restart-head-unit',
+                             'test', 'store-install', 'restart-head-unit', 'mgu-check',
                              'bridge-probe', 'bridge-install', 'bridge-status', 'bridge-log', 'bridge-uninstall', 'bridge-car-probe',
                              'bridge-set-code',
                              'install-ridetube', 'install-idrive-apps', 'install-car-apps', 'install-our-apps',
@@ -2153,7 +2195,7 @@ def main(argv=None):
             do_usb_repo(node, a.stage, (['github:' + a.repo] if a.repo else []), log=log)
             return
 
-        node, ssh = preflight(log, need_ssh=(a.action in ('test', 'store-install', 'restart-head-unit')))
+        node, ssh = preflight(log, need_ssh=(a.action in ('test', 'store-install', 'restart-head-unit', 'mgu-check')))
         if a.action == 'test':
             if not a.key:
                 ap.error('--key is needed')
@@ -2171,6 +2213,11 @@ def main(argv=None):
                 ap.error('--key is needed')
             do_restart_head_unit(a.ip or ip_from_key(a.key) or DEFAULT_IP, a.key, log=log, wait=not a.no_wait)
             log('The head unit restarted.' if not a.no_wait else 'Restart requested.')
+            return
+        if a.action == 'mgu-check':
+            if not a.key:
+                ap.error('--key is needed (do the root-access step first)')
+            do_mgu_check(ssh, a.ip or ip_from_key(a.key) or DEFAULT_IP, a.key, log=log)
             return
         if a.action in ('bridge-probe', 'bridge-install', 'bridge-status', 'bridge-log', 'bridge-uninstall', 'bridge-car-probe'):
             if not a.key:
