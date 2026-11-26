@@ -140,6 +140,13 @@ This project bundles three upstream repositories, each copied unchanged except w
 - `installer/pid_capture.py` reads a Wireshark capture (pcap / pcapng) of the ENET link, or a root-tool
   session log, and reports which diagnostic identifiers a logging tool asked the car for, writing a
   `custom_pids.json` skeleton for Bimmhacks Tuner. Offline; it never talks to the car.
+- The installer adds a **head-unit arch guard** around the vendored root tool: the GUI "Head unit" box
+  starts blank (no id7 default) and a **Detect head unit** button reads the unit's BTLD software level over
+  ENET (036.xxx = iDrive 8, 030.xxx and older = iDrive 7) to set it. Before any flash, `assert_arch_matches`
+  re-reads that level and **refuses a family mismatch** (e.g. id7 selected on an id8 unit), which upstream
+  does not check - flashing the wrong image partially writes the wrong regions and leaves the unit stuck on
+  the blue programming screen. The CLI `root-flash` / `root-fix-key` now require an explicit `--arch`. Tests:
+  `installer/tests/test_guards.py` (ArchDetection + the mismatch/missing-arch guards).
 - `tools/mgu-check/mgu-check.js` is a first-party, read-only on-car diagnostic (from the MGU Styles
   tooling, part of this project — not third-party): run over SSH it reports on MGU Styles, the phone map
   on the cluster (Maps on cluster) and the cluster renderer, for the first drives of a release. It only

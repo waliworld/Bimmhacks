@@ -31,7 +31,7 @@ it. Stage C (App Store) needs internet at the car (or a prepared USB stick).
 """
 import argparse, hashlib, json, os, queue, re, shutil, stat, subprocess, sys, tempfile, threading, time
 
-VERSION = '1.21.0'
+VERSION = '1.22.0'
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 DEFAULT_IP = '169.254.36.47'                # the unit's address with the idrive7-8-ssh-root tool
@@ -367,15 +367,21 @@ def require_backup_confirmation(action, confirmed):
             'command with --confirm-backup to say you have done it.')
 
 
-def do_root(action, log, vin=None, ip=None, gateway='auto', arch='id7', backup_confirmed=False):
+def do_root(action, log, vin=None, ip=None, gateway='auto', arch=None, backup_confirmed=False):
     """Root-access actions. Returns the path of the SSH key when one was written, else None."""
     if IS_WIN:
         log('Note: on Windows, run this installer as Administrator so the ENET link-local address is used.')
     require_backup_confirmation(action, backup_confirmed)
     flashing = action in FLASHING_ACTIONS
+    if flashing and not arch:
+        raise InstallerError('Pick the head unit first: id7, id8-bdc3 or id8-bcp (in the app click "Detect head '
+                             'unit"; on the command line pass --arch). This tool no longer assumes id7, because '
+                             'flashing the wrong image can leave the unit stuck on the blue programming screen.')
     if flashing and not (vin and re.match(r'^[A-HJ-NPR-Z0-9]{17}$', vin.upper())):
         raise InstallerError('A valid 17-character VIN is needed to flash. Use "Detect VIN", or type it in.')
     if flashing:
+        # the guard that would have prevented the id7-on-id8 brick: refuse a family mismatch before writing
+        assert_arch_matches(log, arch, ip=ip, gateway=gateway)
         log('WARNING: flashing reprograms the head unit and wipes its coding and BMW Digital Key pairings.')
         log('Back up the coding first (BimmerCode / E-Sys). This is a one-time step per car.')
     names = {'status': 'Reading the head unit state (read-only) ...',
@@ -425,6 +431,65 @@ def vin_from_output(lines):
     return None
 
 
+# The head unit's family is read from its BTLD software level: iDrive 7 units report 030.xxx (and the
+# older 016/024.xxx base levels), iDrive 8 units report 036.xxx. The debug image differs by family, and
+# flashing the wrong one partially writes the wrong regions and leaves the unit stuck on the blue
+# programming screen - so the selected arch MUST match the unit. (id8 then splits into bdc3 / bcp by the
+# car's body controller, which the software level does NOT reveal - see the Head-unit note in the GUI.)
+_BTLD_LEVEL = re.compile(r'\bBTLD\s+[0-9A-Fa-f]{8}_(\d{3})\.(\d{3})\.(\d{3})\b')
+
+
+def arch_family(arch):
+    """'id8' for any id8-* variant, else 'id7'."""
+    return 'id8' if (arch or '').startswith('id8') else 'id7'
+
+
+def software_family(major):
+    """Head-unit family from the BTLD software major: 036+ = id8, <=030 = id7, else None (unknown)."""
+    if major >= 36:
+        return 'id8'
+    if major <= 30:
+        return 'id7'
+    return None
+
+
+def detect_head_unit(log, ip=None, gateway='auto'):
+    """Read-only: read the unit's BTLD software level over ENET and work out its family.
+    -> (family 'id7'|'id8'|None, level string|None). Never writes to the car."""
+    ensure_cryptography(log)
+    lines = []
+
+    def grab(m):
+        lines.append(m)
+        log(m)
+    run_ssh_root('status', grab, ip=ip, gateway=gateway)
+    for m in lines:
+        found = _BTLD_LEVEL.search(m)
+        if found:
+            return software_family(int(found.group(1))), '%s.%s.%s' % found.groups()
+    return None, None
+
+
+def assert_arch_matches(log, arch, ip=None, gateway='auto'):
+    """Before flashing, confirm the selected arch's family (id7 vs id8) matches the unit's software
+    level. Read-only; raises InstallerError on a clear id7<->id8 mismatch (the footgun that leaves a
+    unit stuck on the blue programming screen). An unreadable level is a note, not a block."""
+    detected, level = detect_head_unit(log, ip=ip, gateway=gateway)
+    if detected and arch and detected != arch_family(arch):
+        raise InstallerError(
+            'HEAD-UNIT MISMATCH - not flashing.\n'
+            'The unit reports software %s, which is %s, but "%s" (%s) is selected. Flashing the wrong image '
+            'partially writes the wrong regions and leaves the unit stuck on the blue programming screen.\n'
+            'Set the head unit to %s%s and try again.'
+            % (level, detected, arch, arch_family(arch), detected.upper(),
+               ' - id8-bdc3 for M2/M3/M4/X3M/X4M (S58), id8-bcp for X7 LCI / XM / U-chassis'
+               if detected == 'id8' else ''))
+    if not detected:
+        log('Note: could not read the head unit software level to double-check the arch; continuing with "%s".'
+            % (arch or '?'))
+    return detected, level
+
+
 # ------------------------------------------------------- coding snapshot (before flashing)
 
 CODING_BACKUP_DIR = os.path.join(REPO, 'coding-backups')
@@ -466,6 +531,8 @@ def do_base_root_force(log, vin=None, ip=None, gateway='auto', backup_confirmed=
     log('EXPERIMENTAL iDrive 7 Base root attempt - overriding the BTLD gate (--force). BRICK RISK.')
     log('Keep a coding backup and have E-Sys / ISTA ready for recovery. If this unit is not BTLD 00003F36,')
     log('the image and security do not match it and this will most likely stop at the security step.')
+    # even the forced base path is id7-only: refuse it on an id8 unit (036.xxx), which it would brick
+    assert_arch_matches(log, 'id7', ip=ip, gateway=gateway)
     code = run_ssh_root('flash', log, vin=vin, ip=ip, gateway=gateway, arch='id7',
                         persist=True, force=True, restart_wait=40)
     if code:
@@ -1414,8 +1481,11 @@ def run_gui():
     ip_var = tk.StringVar(value=cfg.get('ip', DEFAULT_IP))
     field(grid, 'VIN', vin_var, width=22, r=0, c=0)
     ttk.Label(grid, text='Head unit', style='Muted.TLabel').grid(row=0, column=2, sticky='w', padx=(18, 8))
-    arch_box = ttk.Combobox(grid, state='readonly', width=11, values=list(ARCHES))
-    arch_box.current(ARCHES.index(cfg.get('arch', 'id7')) if cfg.get('arch', 'id7') in ARCHES else 0)
+    # Always start blank (no id7 default, and the last car's choice is not carried over): the head unit
+    # must be chosen or detected for the car in front of you before a flash. The flash also refuses a
+    # family mismatch, so a stale pick can never send the wrong image.
+    arch_var = tk.StringVar(value='')
+    arch_box = ttk.Combobox(grid, state='readonly', width=11, values=list(ARCHES), textvariable=arch_var)
     arch_box.grid(row=0, column=3, sticky='w')
     field(grid, 'Root SSH key', key_var, r=1, c=0, colspan=3, sticky='we')
 
@@ -1473,13 +1543,12 @@ def run_gui():
     def save():
         save_config(dict(load_config(),
                          vin=vin_var.get().strip().upper(), key=key_var.get().strip().strip('"'),
-                         ip=ip_var.get().strip(),
-                         arch=ARCHES[arch_box.current()] if arch_box.current() >= 0 else 'id7'))
+                         ip=ip_var.get().strip(), arch=arch_var.get()))
 
     def conn_values():
         save()
         return (vin_var.get().strip().upper(), key_var.get().strip().strip('"'),
-                ip_var.get().strip(), ARCHES[arch_box.current()] if arch_box.current() >= 0 else 'id7')
+                ip_var.get().strip(), arch_var.get() or None)
 
     def need_ssh():
         s = find_ssh()
@@ -1526,6 +1595,9 @@ def run_gui():
     notice(c1, 'Flashing reprograms the head unit and wipes its coding and BMW Digital Key pairings. Flash + enable '
                'SSH takes a coding backup first (or you confirm you have one from another tool); re-pair keys after. '
                'Windows: run as Administrator.', wrap=500)
+    para(c1, 'Set the "Head unit" above to match the car before flashing - click "Detect head unit" to read it. '
+             'iDrive 7 = id7; iDrive 8 = id8-bdc3 (M2/M3/M4/X3M/X4M) or id8-bcp (X7 LCI / XM / U-chassis). '
+             'The wrong image can leave the unit stuck on the blue screen, so the flash refuses a mismatch.', wrap=500)
     backup_done = tk.BooleanVar(value=False)
     gchk = row(c1, pady=(8, 0))
     ttk.Checkbutton(gchk, variable=backup_done,
@@ -1551,15 +1623,32 @@ def run_gui():
         start(w, 'Read-only coding backup saved - see the activity log.')
 
     def on_detect_vin():
-        _, _, _, arch = conn_values()
+        _, _, ip, _ = conn_values()
         def w():
-            v = detect_vin(log, arch=arch)
+            v = detect_vin(log, ip=ip or None)
             if v:
                 ui_set(vin_var, v)
                 log('Detected VIN: ' + v)
             else:
                 log('VIN not detected. Is the ENET cable in and the car awake?')
         start(w, 'VIN read - see the activity log.')
+
+    def on_detect_arch():
+        _, _, ip, _ = conn_values()
+        def w():
+            fam, level = detect_head_unit(log, ip=ip or None)
+            if not fam:
+                raise InstallerError('Could not read the head unit (software level). Check the ENET cable, '
+                                     'the ignition, and that the car is awake, then try again.')
+            pick = 'id8-bdc3' if fam == 'id8' else 'id7'
+            ui_set(arch_var, pick)
+            if fam == 'id8':
+                log('Detected iDrive 8 (software %s). Set the head unit to id8-bdc3.' % level)
+                log('id8-bdc3 fits M2 / M3 / M4 / X3M / X4M (S58 cars). If this is an X7 LCI, XM, or a '
+                    'U-chassis car (2-series / X1 / X2), change it to id8-bcp before flashing.')
+            else:
+                log('Detected iDrive 7 (software %s). Set the head unit to id7.' % level)
+        start(w, 'Head unit detected - see the "Head unit" box above and the log.')
 
     def on_root(action, confirm=None, need_backup=False):
         vin, _, _, arch = conn_values()
@@ -1609,6 +1698,7 @@ def run_gui():
 
     rr1 = row(c1, pady=(6, 4))
     button(rr1, 'Detect VIN', on_detect_vin)
+    button(rr1, 'Detect head unit', on_detect_arch)
     button(rr1, 'Check state', lambda: on_root('status'))
     rrb = row(c1, pady=(0, 4))
     button(rrb, 'Back up coding', on_backup)
@@ -2107,7 +2197,9 @@ def main(argv=None):
     ap.add_argument('--key', help='root SSH private key (id_rsa from the root-access step)')
     ap.add_argument('--ip', help='head unit address (default: from connect.txt next to the key, else %s)' % DEFAULT_IP)
     ap.add_argument('--vin', help='17-char VIN (required for root-flash / root-fix-key)')
-    ap.add_argument('--arch', default='id7', choices=ARCHES, help='head-unit variant (default: id7)')
+    ap.add_argument('--arch', default=None, choices=ARCHES,
+                    help='head-unit variant: id7 / id8-bdc3 / id8-bcp. REQUIRED for root-flash / root-fix-key '
+                         '(036.xxx software = id8); optional for reads. There is no id7 default for flashing.')
     ap.add_argument('--gateway', default='auto', help="ENET gateway address, or 'auto' (default)")
     ap.add_argument('--out', help='backup-coding / pid-capture: folder to write into')
     ap.add_argument('--backup', help='verify-coding / restore-coding: the coding backup .json to use')

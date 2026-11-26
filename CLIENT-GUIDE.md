@@ -60,7 +60,12 @@ Having BimmerCode / E-Sys / Autel as a fallback is strongly advised.
 Then:
 
 1. Connect the ENET cable, wake the car.
-2. Click **Detect VIN** (or type the 17-char VIN). Pick the **Head unit** (id7 for iDrive 7).
+2. Click **Detect VIN** (or type the 17-char VIN), then **Detect head unit** — it reads the car and sets
+   the **Head unit** box for you. **This must match the car:** iDrive 7 = **id7**; iDrive 8 = **id8-bdc3**
+   (M2 / M3 / M4 / X3M / X4M) or **id8-bcp** (X7 LCI / XM / U-chassis 2-series / X1 / X2). The box starts
+   blank on purpose — there is no id7 default. Flashing the **wrong** image can leave the unit stuck on the
+   blue programming screen, so the installer **reads the software level and refuses a mismatch** before it
+   writes (036.xxx = iDrive 8, 030.xxx and older = iDrive 7).
 3. Click **Flash + enable SSH**. **It will not flash without a coding backup:** a dialog asks you to
    either **back it up now** (recommended — it runs the backup above, then flashes) or, if you choose to
    skip, to **confirm a warning** that you already have a backup from BimmerCode / E-Sys / Autel.
@@ -294,6 +299,8 @@ re-install the Store, run the installer again. Coding backups are kept in `codin
 |---|---|
 | Root access can't reach the car | Use the **ENET cable** (not Wi-Fi), ignition on. Windows: run as Administrator. |
 | *A valid 17-character VIN is needed* | Click **Detect VIN**, or type the VIN from the windshield. |
+| *Pick the head unit first* / *HEAD-UNIT MISMATCH — not flashing* | The installer no longer assumes id7. Click **Detect head unit** (it reads the car and sets the box), or pick the right one: **id7** (iDrive 7), **id8-bdc3** (M2/M3/M4/X3M/X4M), **id8-bcp** (X7 LCI / XM / U-chassis). A *mismatch* message means the unit's software says it's the other family — the flash is refused on purpose so the wrong image can't brick it. |
+| The head unit is **stuck on the blue programming screen** | A flash that was interrupted or sent the **wrong image** leaves it here. First try **Root access → Fix blue screen** (no write). If that doesn't clear it, re-flash with the **correct Head unit** (Detect head unit, charger on, wired ENET) — a successful matching flash completes the programming. If the correct image is also refused, the unit needs a reprogram in **ISTA / E-Sys**. |
 | *MainApp … a version the patch does not know* | This firmware isn't supported yet. Nothing was changed. Contact us. |
 | *Could not log in to the head unit* | Do **Root access** first, or *Browse* to the right `id_rsa`. Check the IP and that the car is awake. |
 | A setting (e.g. **Wi-Fi**) turns itself off again after the car sleeps | A head-unit setting that will not persist is the classic sign of **incomplete coding after a flash** — the flash wipes the CAFD coding, and a whole-blob restore can leave settings resetting. Re-code **HU_MGU by vehicle order ("code by FA" / VO coding)** in E-Sys or BimmerCode; that is the documented fix. The wireless-bridge helper is **not** the cause on a unit without `hostapd`/`iw` — it never touches the radio there. |

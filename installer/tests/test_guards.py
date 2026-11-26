@@ -70,11 +70,31 @@ class FlashNeedsBackupConfirmation(unittest.TestCase):
     def test_flag_opens_the_gate_but_a_bad_vin_still_stops_it(self):
         for bad in (None, 'SHORT', 'WBA1234567890123I', 'WBA1234567890123O', 'WBA1234567890123Q', 'WBA123456789012345'):
             with self.subTest(vin=bad), FakeCar() as car:
-                args = ['root-flash', '--gateway', '127.0.0.1', '--confirm-backup'] + (['--vin', bad] if bad else [])
+                args = (['root-flash', '--gateway', '127.0.0.1', '--confirm-backup', '--arch', 'id7']
+                        + (['--vin', bad] if bad else []))
                 r = cli(*args)
                 self.assertEqual(r.returncode, 1)
                 self.assertIn('VIN', r.stderr)
                 self.assertEqual(car.requests, [], 'a bad VIN must not reach the car (%r)' % bad)
+
+    def test_flash_without_a_head_unit_is_refused_and_sends_nothing(self):
+        # no --arch: the tool no longer assumes id7, and refuses before touching the car
+        with FakeCar() as car:
+            r = cli('root-flash', '--vin', VIN, '--gateway', '127.0.0.1', '--confirm-backup')
+            self.assertEqual(r.returncode, 1)
+            self.assertIn('head unit', r.stderr)
+            self.assertEqual(car.requests, [], 'a missing head unit must not reach the car')
+
+    def test_arch_mismatch_is_refused_before_any_write(self):
+        # the FakeCar reports BTLD 030.016 (= iDrive 7); selecting an id8 variant must be refused after the
+        # read-only software-level check and before any flash write (no security access, no download)
+        with FakeCar() as car:
+            r = cli('root-flash', '--vin', VIN, '--gateway', '127.0.0.1', '--ip', '127.0.0.1',
+                    '--confirm-backup', '--arch', 'id8-bdc3')
+            self.assertEqual(r.returncode, 1)
+            self.assertIn('MISMATCH', r.stderr)
+            self.assertNotIn(0x27, car.services(), 'no SecurityAccess on a refused arch mismatch')
+            self.assertNotIn(0x34, car.services(), 'no download on a refused arch mismatch')
 
     def test_the_gate_is_in_do_root_itself(self):
         # not only the CLI: any caller of do_root() is held to it
@@ -92,10 +112,11 @@ class FlashNeedsBackupConfirmation(unittest.TestCase):
             self.assertNotIn(0x27, car.services(), 'no security access in a status read')
 
     def test_confirmed_flash_does_start(self):
-        # the gate opens only with the flag: the car then sees the flash sequence begin (the fake car does not
-        # implement flashing, so the run itself fails - what matters is that it was allowed to start)
+        # the gate opens with the flag AND a matching head unit (FakeCar is id7, so --arch id7): the car then
+        # sees the flash sequence begin (the fake car does not implement flashing, so the run itself fails -
+        # what matters is that it was allowed to start)
         with FakeCar() as car:
-            cli('root-flash', '--vin', VIN, '--gateway', '127.0.0.1', '--confirm-backup')
+            cli('root-flash', '--vin', VIN, '--gateway', '127.0.0.1', '--confirm-backup', '--arch', 'id7')
             self.assertIn(0x10, car.services())      # DiagnosticSessionControl: the flash sequence started
 
 
@@ -114,6 +135,50 @@ class OtherGuards(unittest.TestCase):
         r = cli('test', '--key', os.path.join(HERE, 'fake_enet.py'), '--ip', '1.2.3.4;reboot')
         self.assertEqual(r.returncode, 1)
         self.assertIn('valid head unit address', r.stderr)
+
+
+class ArchDetection(unittest.TestCase):
+    """The head-unit detection + arch guard, as pure logic (no car)."""
+
+    def test_software_family_thresholds(self):
+        self.assertEqual(bi.software_family(16), 'id7')    # base M5 016.018
+        self.assertEqual(bi.software_family(24), 'id7')    # G30 024.010
+        self.assertEqual(bi.software_family(30), 'id7')    # verified 030.016
+        self.assertEqual(bi.software_family(36), 'id8')    # the stuck S58 036.010
+        self.assertEqual(bi.software_family(40), 'id8')    # a future id8 level
+        self.assertIsNone(bi.software_family(33))          # between the two known bands: unknown
+
+    def test_arch_family(self):
+        self.assertEqual(bi.arch_family('id7'), 'id7')
+        self.assertEqual(bi.arch_family('id8-bdc3'), 'id8')
+        self.assertEqual(bi.arch_family('id8-bcp'), 'id8')
+        self.assertEqual(bi.arch_family(None), 'id7')
+
+    def test_assert_refuses_id7_on_id8_but_allows_matching_id8(self):
+        real = bi.detect_head_unit
+        bi.detect_head_unit = lambda log, ip=None, gateway='auto': ('id8', '036.010.043')
+        self.addCleanup(setattr, bi, 'detect_head_unit', real)
+        with self.assertRaises(bi.InstallerError) as cm:
+            bi.assert_arch_matches(lambda m: None, 'id7')
+        self.assertIn('MISMATCH', str(cm.exception))
+        self.assertIn('id8-bdc3', str(cm.exception))      # the guidance names the right family
+        bi.assert_arch_matches(lambda m: None, 'id8-bdc3')  # a matching id8 variant must not raise
+
+    def test_unreadable_level_is_a_note_not_a_block(self):
+        real = bi.detect_head_unit
+        bi.detect_head_unit = lambda log, ip=None, gateway='auto': (None, None)
+        self.addCleanup(setattr, bi, 'detect_head_unit', real)
+        msgs = []
+        bi.assert_arch_matches(msgs.append, 'id7')         # must not raise when the level can't be read
+        self.assertTrue(any('could not read' in m for m in msgs))
+
+    def test_btld_level_regex_parses_a_status_line(self):
+        line = ('SVK: HWEL 00007EC7_001.002.001, BTLD 00003F36_036.010.043, SWFL 00005CC5_036.010.004, '
+                'SWFL 00005686_036.010.004')
+        m = bi._BTLD_LEVEL.search(line)
+        self.assertIsNotNone(m)
+        self.assertEqual(m.groups(), ('036', '010', '043'))
+        self.assertEqual(bi.software_family(int(m.group(1))), 'id8')
 
 
 if __name__ == '__main__':
